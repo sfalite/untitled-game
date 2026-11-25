@@ -1,0 +1,6 @@
+{
+  "name": "@moddio-games/blank",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@moddio/sim": "0.6.0", "@moddio/server": "0.6.0", "@moddio/client": "0.6.0" }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "blank",
+  "title": "Blank",
+  "sim": "sim.ts",
+  "server": "server.ts",
+  "client": "client/index.html",
+  "products": [],
+  "game": "untitled-game-b8a1fb"
+}

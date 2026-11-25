@@ -1,0 +1,549 @@
+# moddio SDK
+
+> Multiplayer games for modd.io. A game is a deterministic simulation (sim.ts) that runs on
+> every player's machine and in the room, optional server hooks (server.ts), and a renderer in
+> any engine (client/). Players send only typed inputs; the room orders them into frames, runs
+> the sim as the authority and sends each frame's inputs to everyone. Your own inputs apply at
+> once (prediction); the room corrects anyone who disagrees with it.
+
+## Folder
+
+    my-game/
+      moddio.json   { "name": "my-game", "title": "My Game", "game": "<site slug>", "products": [...], "menu": true }
+      sim.ts        export default defineSim({...})        the rules (players per room: its maxPlayers)
+      server.ts     export default defineServer({...})     optional server-only hooks
+      client/       index.html + main.ts                   the renderer (index.html loads main.js,
+                                                           which is main.ts bundled by moddio dev/publish)
+      assets/       images, sounds
+
+Use relative paths for every file a game loads: `main.js`, `assets/hero.png`, `client/style.css`,
+never `/main.js` or `/assets/...`. A published game may be served under a path (on a preview or
+behind a proxy, at /__g/<version>--<game>/), where a path starting with / points outside it.
+`moddio dev` and the site serve the same files at the same relative paths.
+
+Start: `npx moddio@latest create my-game --template blank|arena|soccer|legacy|marble [--game <slug>]`, then
+`cd my-game && npm install`. The SDK is one npm package, moddio (`npm i -D moddio` in a folder of your own):
+it carries @moddio/sim, @moddio/server and @moddio/client, and its CLI resolves those imports.
+Commands: `moddio dev` (local room + page; open ?player=a and ?player=b, or
+/__moddio/play?player=a for the play page's sandboxed frame), `moddio test` (run after every
+change; `moddio engines` once adds JavaScriptCore and SpiderMonkey to it), `moddio play` (the
+game in headless Chromium with scripted input: screenshots and console logs; see Testing),
+`moddio login`, `moddio publish`. Outputs go under the project's .moddio/.
+
+npm packages: `moddio add <name>[@version]` (`moddio remove <name>`), not `npm install`. Only
+packages from the npm registry (no git, URLs or files). They go in the game's npm/ folder:
+npm/package.json and npm/package-lock.json belong to the game; npm/node_modules is installed again
+from them by the next build when missing. Import them as usual from sim.ts, server.ts or client/;
+the bundles carry them to players, so prefer small, well-known packages. The sim must stay
+deterministic with them too (no Math.random, Date or timers inside): `moddio test` checks.
+
+## sim.ts
+
+    import { defineSim } from '@moddio/sim';
+
+    export default defineSim({
+      name: 'my-game',             // short id
+      version: '1',                // bump when the rules change
+      tickRate: 20,                // ticks per second (default 20)
+      maxPlayers: 16,
+      input: { move: ['i8', 'i8'], aim: 'u16', buttons: { flags: ['fire', 'jump'] } },  // the input SHAPE
+
+      init(ctx) { return { players: {}, coins: [] }; },            // starting state; ctx.rng, ctx.seed, ctx.config
+      join(state, id, ctx, info) {     // info: { id, name, avatar, roles } from the player's ticket
+        state.players[id] = { name: info.name, x: 0, y: 0, move: [0, 0], fire: false };
+      },
+      leave(state, id, ctx) { delete state.players[id]; },
+      disconnect(state, id, ctx) {},   // optional: connection lost, seat kept (default: nothing)
+      reconnect(state, id, ctx) {},    // optional
+      onInput(state, id, input, ctx) { // the player's latest input; store it, act in step
+        const p = state.players[id];
+        p.move = [input.move[0] / 128, input.move[1] / 128];
+        p.fire = input.buttons.fire;
+      },
+      event(state, e, ctx) {},         // a server event (from server.ts), on its frame
+      predict: 'self',                 // the default; or 'world' (see Prediction below)
+      step(state, ctx) {               // one tick
+        for (const id of Object.keys(state.players).sort()) {
+          const p = state.players[id];
+          p.x += p.move[0] * 5; p.y += p.move[1] * 5;
+        }
+      },
+    });
+
+### Input shapes
+
+Scalars: `i8 u8 i16 u16 i32 u32 f32 bool`. Tuples: `['i8', 'i8']` (arrays). Bitfields:
+`{ flags: ['fire', 'jump'] }` (an object of booleans, up to 32). A record of fields is the
+top level. At most 64 bytes. Values are clamped and truncated to their type (f32 rounded,
+non-finite becomes 0); the room drops any input that is not exactly the shape.
+
+An input HOLDS until the next one: the client sends inputs only when they change. So store
+the latest input in the state in onInput and act on it in step; never treat an input as
+"this tick only".
+
+### ctx
+
+    ctx.frame       ticks since the room began (seconds = frame / tickRate)
+    ctx.tickRate
+    ctx.rng()       [0, 1), deterministic: the same on every client
+    ctx.int(n)      integer in [0, n)
+    ctx.players     player ids in the room, sorted
+    ctx.out(effect) ask the platform for something: { save: data, player }, { offer: 'sword', player }
+                    (the purchase dialog, see Shop), { purchase, accept } (the answer to a
+                    `purchased` event, see Shop), { text: 'ask', player }. Every client computes
+                    effects; only the room's are carried out.
+    ctx.physics     the physics world, if the sim declares `physics`
+    ctx.config      (init only) the room's settings
+
+### Rules (the realm enforces them; the errors say what to use)
+
+- No Math.random (use ctx.rng), no Date or timers (count ctx.frame), no fetch/WebSocket (use
+  ctx.out and server events), no Intl/toLocaleString/localeCompare (compare with < and >).
+  These do not exist in the sim: it runs in its own realm with them removed.
+- Math.sin/cos/tan/exp/log/pow/atan2/hypot/cbrt... are deterministic replacements, the same bits
+  in every browser. `**` is compiled to the same Math.pow. + - * / and Math.sqrt are exact.
+- State is plain data: objects, arrays, numbers, strings, booleans, null (and Uint8Array). No
+  classes, Map, Set, Date, functions, and no object referenced from two places (store ids).
+- Iterate players in a fixed order: `Object.keys(state.players).sort()`.
+- Never branch on anything but the state, the input and ctx.
+- Secrets cannot live in the sim (every client has the whole state): hidden randomness comes
+  from the server as an event when it happens.
+
+### Physics
+
+Rapier (deterministic build), 2D or 3D:
+
+    import RAPIER from '@dimforge/rapier2d-deterministic-compat';
+    import { rapier, bodyFingerprint, renderBodies } from '@moddio/sim/rapier';
+    defineSim({ physics: rapier(RAPIER, { gravity: { x: 0, y: 0 }, timestep: 1 / 20 }),
+      init(ctx) { const world = ctx.physics; ... },        // typed: RAPIER.World, no casts
+      step(state, ctx) { ... ctx.physics.step(); },
+      fingerprint: (state, id, { physics }) => bodyFingerprint(physics, state.players[id].body),
+      render: (state, { physics }) => ({ ...state, bodies: renderBodies(physics) }) })
+
+Keep body HANDLES (numbers) in the state; get bodies with `ctx.physics.getRigidBody(handle)`.
+`bodyFingerprint(world, handle)` is a body's pose to the centimetre (the usual 'self'
+fingerprint); `renderBodies(world)` lists every collider as plain data for render():
+`{ h, x, y, a, r }` (ball) or `{ h, x, y, a, hx, hy }` (box) in 2D; `z`, quaternion `q` and box
+half extents `e` in 3D. `h` is the body handle.
+
+Planck.js 0.3.22 (moddio2's physics):
+
+    import { planck, pl } from '@moddio/sim/planck';
+    defineSim({ physics: planck({ gravity: { x: 0, y: 0 } }),
+      init(ctx) { const world = ctx.physics; const b = world.createBody({ type: 'dynamic', position: pl.Vec2(1, 2) });
+                  b.createFixture(pl.Circle(0.5), { density: 1 }); return { ball: world.idOf(b) }; },
+      step(state, ctx) { const world = ctx.physics; world.step(1 / 20, 8, 3);
+                         for (const c of world.contacts()) { /* { type: 'begin'|'end', a, b, sensor } by body id */ } } })
+
+Keep body ids (`world.idOf(body)`) in the state; look up with `world.bodyOf(id)`. Read contacts
+with `world.contacts()` right after `world.step()`. Contact listeners you add yourself must be
+registered in `planck({ setup(world, pl) { ... } })`, which runs on every rebuilt world.
+With the default `predict: 'self'`, a physics game returns its own body's pose from
+`fingerprint(state, id, { physics })`, rounded to centimetres (see Prediction).
+
+### Any other physics library: write a driver
+
+Games may use any physics library, as long as it is deterministic. `moddio test` proves it:
+the sim must hash the same in V8, JavaScriptCore and SpiderMonkey every tick, or the game
+doesn't publish. Plug a library in with a `PhysicsDriver` (exported by `@moddio/sim`):
+
+    const myPhysics: PhysicsDriver<MyWorld> = {
+      kind: 'mylib',
+      canonicalEvery: 0,          // 0 if save/load is exact; else rebuild every N frames (below)
+      predict: 'self',            // optional: the default prediction mode for games on it
+      async ready() { /* load wasm etc. once */ },
+      create() { return new MyWorld(); },                 // a fresh world, for init
+      save(world) { return /* plain data: everything load needs */; },
+      load(data) { return /* a world that continues exactly like the saved one */; },
+      digest(world, h, q) { return /* fold every body's state into hash h; round numbers to 1/q when q is given */; },
+      free(world) { /* release wasm memory; called when a world is abandoned */ },
+      view(world) { return world; },                     // optional: what the game sees as ctx.physics
+    };
+    defineSim({ physics: myPhysics, ... })
+
+When each is called:
+- `create`: once per room, before `init`.
+- `save`: for snapshots (joiners, corrections) and when the prediction is copied.
+- `load`: when a client joins mid-game, is corrected, or rolls back. It must be a pure function
+  of what `save` returned.
+- `digest`: every frame for the room's hash and the cross-engine check; with `q`, for the
+  prediction's fingerprint.
+
+**Exact or canonical.** If a world restored with `load(save(w))` steps bit-for-bit like `w`,
+set `canonicalEvery: 0` (Rapier, Box2dWeb with care). If it doesn't (a library whose contact
+cache or broad-phase tree is history, not data, like Planck), set `canonicalEvery` (e.g. 100):
+every world, the room's included, is rebuilt from its own save on those frames, so all of them
+agree again by construction, and snapshots are taken only on those frames.
+
+**Pitfall: state outside the world.** Some libraries keep settings in module- or class-level
+variables that only their world constructor sets (Box2dWeb does this for two settings). A
+client restored with `load` never runs that constructor, so it silently drifts from the room
+and keeps being corrected. `load` must set every such global itself. Node tests can't show
+this, because there the room and the clients share one realm; the browser test can.
+
+### Prediction
+
+Your own player always has zero input delay. The default, `predict: 'self'`, predicts only your
+player: the renderer draws everyone else from the room's world, interpolated (smooth, about a
+playout delay behind), and itself from `self` (see client). Physics games return their own
+body's pose from `fingerprint(state, id, { physics })`, rounded to centimetres (used only in
+'self' mode; 'world' always compares the whole world).
+
+Choose `predict: 'world'` only when the local player's actions on others must show at once -
+shoving another player's body, grabbing a shared item first, a melee hit that must land on
+screen the instant you press. The whole predicted world is then kept in step with the room and
+drawn as one (`state` and `self` are the same world); remote players can snap when the room
+corrects them, and it costs more CPU (a rebuild on about 40% of ticks, against 1%).
+
+## server.ts
+
+    import { defineServer } from '@moddio/server';
+
+    export default defineServer({
+      async join(player, room) {           // player: { id, name, roles }
+        room.event({ type: 'loaded', id: player.id, save: await room.save.get(player) });
+      },
+      async leave(player, room) {},
+      async effect(effect, room) {         // the room's ctx.out effects
+        if ('save' in effect) await room.save.set(effect.player, effect.save);
+      },
+      tick(room) {                         // every frame; may be async (skipped while still running)
+        if (room.frame % 600 === 0 && room.random() < 0.5) room.event({ type: 'boss', x: room.random() * 100 });
+      },
+    });
+
+room: `id` (the room's name), `state` (a per-room object for anything the hooks keep),
+`event(e)` (plain data; returns the frame it applies on, a few frames ahead, the same frame for
+everyone), `private(player, data)` (to one player, outside the state; each event or private message
+at most 64 KB as JSON, 32 of them a frame), `save.get/set` (64 KB per
+player), `shop.purchases(player)` (see Shop), `random()`, `frame`, `players`, `log()`.
+Hooks never change the state directly: only through room.event.
+
+Every `ctx.out({...})` the sim makes, whatever its shape, reaches `effect` (from the room's own
+copy of the sim only). The hooks run in a sandbox, one per room: no require, process, fs, fetch
+or timers, a CPU limit per call (a hook stuck in a loop is stopped, and the room plays on), and
+module-level variables are per room. `moddio test` runs them that way and reports which hooks
+ran, which events they inserted, and fails if any hook threw.
+
+## client (renderer)
+
+    import { playInWorker, canvas2d, controls, mergeSelf } from '@moddio/client/browser';
+
+    const view = canvas2d(canvas);       // sized to the window at screen density, resized only when it is
+    const keys = controls(canvas);
+    const game = await playInWorker({
+      input: () => ({ move: keys.move().map((v) => v * 127), aim: 0, buttons: { fire: keys.mouse.down, jump: keys.pressed(' ') } }),
+    });
+    game.onFrame(({ state, self }) => {  // every screen frame, interpolated
+      const ctx = view.begin('#101418'); // transform reset to CSS pixels, background filled
+      const s = mergeSelf(state, self, 'players', game.player);   // everyone from state, you from self
+      if (s) draw(ctx, s, view.width, view.height);
+    });
+    game.onEffect((effect, frame) => {});    // confirmed effects
+    game.onPrivate((data) => {});
+    game.player                              // your player id
+
+The sim, the netcode and the room connection run in a Web Worker; the page samples `input`
+continuously and draws. What onFrame hands over is the sim's `render(state, { physics })`
+output (or its state, if it has no render), interpolated between the two ticks around this
+instant (numbers blended, objects by key, arrays by item `id`/`h`): `state` is what to draw,
+`self` the local player's world at its own clock: draw everyone from `state` and yourself from
+`self` (in predict 'world' they are the same world). `mergeSelf(state, self, 'players', id)` does
+that for a record keyed by player id; for an array, name the item key:
+`mergeSelf(state, self, 'bodies', state.players[me].body, 'h')`.
+
+`controls(canvas)`: `keys` (held, lower-case `KeyboardEvent.key`), `move()` (WASD/arrows as
+[-1..1, -1..1]), `mouse` ({ x, y } in CSS pixels, `down`, `buttons` [main, middle, secondary];
+no context menu over the canvas), `pressed(key)` (true once per press of a key or 'mouse0'..'mouse2',
+for one-shot actions), `world({ scale, ox, oy })` (the pointer in world units, given screen =
+world * scale + offset), `touch` (the player is on a phone or tablet).
+
+Players also play on phones and tablets, so every game must be playable by touch. `controls`
+reads touch for you: a finger on the left half of the canvas drags an on-screen stick that
+`move()` returns (once the game calls move()); any other finger is the mouse (position, `down`, a
+'mouse0' press). Every other key the game uses needs an on-screen button:
+`controls(canvas, { buttons: [{ key: ' ', label: 'Jump' }, { key: 'e', label: 'Use' }] })` shows
+them at the bottom right on touch screens only; holding one holds its key (and fires keydown/keyup,
+so a game's own key listeners see it too). Keep the HUD clear of
+the bottom corners on touch screens, and readable on a small screen (`view.width` may be 360). `canvas2d(canvas, { size: 'element', hiDpi: false })` follows the
+element's CSS size or draws one canvas pixel per CSS pixel; `view.onResize(cb)`. A physics game must define `render` and return its bodies'
+poses as plain data: the physics world lives in the worker, out of the page's reach.
+
+    render(state, { physics }) { return { players: state.players, bodies: [/* { x, y, angle, ... } */] }; }
+
+On the play page, the client asks the page for a ticket (postMessage), which names the room,
+the player and the room host; under `moddio dev` it uses room '<game>/dev', ?player= from the
+URL, and this page's host. Pages are served as the site serves them: sandboxed (opaque origin),
+no eval, no inline scripts, no localStorage or cookies, no other hosts, no WebRTC, no frames of its own (a
+srcdoc frame or a data:/blob: page runs none of the game's scripts). /__moddio/play?player=a
+stands in for the play page. Load scripts with type="module".
+
+Your inputs apply at once (zero input delay). Never change the state in the renderer.
+
+### Servers (the game's own menu)
+
+The play page has no lobby: the server list, joining a friend's server and starting a new one
+are the game's to show, in its own menu drawn by the client. A game starts one of two ways:
+
+- Straight into a server (the default): opening the game puts the player in the best open
+  server running the game's current version (or a new one), and the play page shows that
+  server's player list and chat beside it. Give the game a menu (a button or a key, e.g. Esc)
+  with at least a server list, to switch with `switchRoom`.
+- At its own menu, in no server (`"menu": true` in moddio.json): for a game whose first screen is
+  a title or main menu with Play, a server picker, a character or skin choice. The player isn't in
+  any server: nobody sees them, no seat is taken, and the play page shows no player list or chat
+  until they join one from the menu. A link or invite to a server, a reload while in one, and
+  switchRoom still start in that server, so always check where the game starts:
+
+    import { atMenu, joinRoom, leaveRoom, playInWorker } from '@moddio/client/browser';
+
+    if (await atMenu()) {            // true: at the menu, in no server; false: a server is waiting
+      await showMenu();              // the menu ends when the player picks and joinRoom resolves:
+      //   await joinRoom();                         Play: what the site's Play does (the fullest
+      //                                              server with space in the player's region, else a new one)
+      //   await joinRoom(r.name);                   a server from pageRooms()
+      //   await joinRoom('region', { region: 'eu' }); joinRoom('new', { region: 'eu' })
+    }
+    const game = await playInWorker({ input: ... });   // connects to the server joined
+    // later, "Main menu" (after a round, from a pause menu):
+    await leaveRoom();               // stops `game` (the room sees the player leave), back at no server
+    await showMenu();                // and in again: joinRoom(...), then playInWorker(...)
+
+  At the menu there is no state: the client draws the menu from its own assets (a title screen,
+  the map, a preview of the player's character), not from onFrame. pageRooms() works there
+  (`current` is null). joinRoom keeps the game loaded, so what the menu set up stays (a picked
+  skin, a name: send it as input or with the first frames, since the sim knows nothing of the
+  menu). It rejects with the reason when it can't (full, closed, not allowed): show it and stay at
+  the menu. A server on another version of the game (an older one still open) and watching
+  (`{ watch: true }`) load the game again in that server instead: atMenu() is false then. Calling
+  playInWorker at the menu without joinRoom does quick play. buy() needs a server (the sim accepts
+  each purchase), so a shop on the menu joins first, or sells once in game. Under `moddio dev`,
+  /__moddio/play opens at the menu too, and every server the menu names is the one dev room.
+
+Either way, the server list:
+
+    import { pageRooms, switchRoom } from '@moddio/client/browser';
+
+    const { current, region, regions, rooms } = await pageRooms();
+    // current: the server this game is in (null at the menu). region: the player's nearest ('na' | 'sa' | 'eu' | 'asia').
+    // regions: every region a server can open in, in display order, even ones with no server:
+    //   [{ id: 'na', name: 'North America' }, { id: 'sa', name: 'South America' },
+    //    { id: 'eu', name: 'Europe' }, { id: 'asia', name: 'Asia' }]
+    // rooms: [{ name, label, players, maxPlayers, versionLabel, full, spectators, region, colo }]
+    for (const g of regions) {
+      const here = rooms.filter((r) => r.region === g.id);
+      header(g.name, g.id === region ? 'nearest' : '');
+      here.forEach((r, i) => row(`${g.name} ${i + 1}`, `${r.players}/${r.maxPlayers}`,   // "Asia 1", "Asia 2"
+        r.name === current ? 'here' : r.full ? 'full' : 'join'));
+      if (!here.length) row(`${g.name} 1`, '0 players', 'start');                    // an empty region
+    }
+    switchRoom(r.name, { onFailed: (why) => toast(why) });   // join that server
+    switchRoom('region', { region: 'asia' });                // join Asia: its fullest server with space, else a new one there
+    switchRoom('new', { region: 'asia' });                   // always a new server, in Asia
+    switchRoom('new');                                        // a new server, in the player's nearest region
+    switchRoom(r.name, { watch: true });                      // spectate (when r.spectators)
+
+pageRooms reads the list fresh each call (ask again when the menu opens; don't poll faster than
+every few seconds). From the menu, join with joinRoom (it keeps the game loaded); in a server,
+move with switchRoom. switchRoom reloads the game's frame in the other server: the game starts
+again there with a new ticket, like a fresh load. Nothing in memory survives; what should carry
+over belongs in the sim's state or server.ts. A server keeps the version it started on, so the
+list can show older versions; label them with versionLabel. The page allows one switch every
+2 s (joins and switches together), and a refused switch (full, closed, not allowed) leaves the
+player where they are and calls onFailed.
+
+Regions: every server runs in one of North America ('na'), South America ('sa'), Europe ('eu')
+or Asia ('asia'), and reports it as `region`. Build the region list from pageRooms' `regions`
+(don't hard-code it), number servers within their region by their order in `rooms` ("Asia 1",
+"Asia 2"), and don't show server ids or version strings as names. Play (the site's button, and
+joinRoom() with no server named) puts a player in the fullest server with space in their nearest
+region, else starts one there; it never puts them in another region. `colo` is the data centre a server runs in (an airport code
+such as "HKG", "AMS", "IAD"): for debugging, not for labels. South American servers run in the
+eastern US for now (Cloudflare, which hosts them, has no data centre for game servers in South
+America); they still show as South America. `regions` is [] and every `region` null when the
+game's servers don't run by region (games on the dedicated heavy host). Under `moddio dev` the
+list is the one dev room (region null) with the four regions, and switching is refused.
+
+Inspection, for tests, HUDs and the console: `game.inspect()` returns `{ confirmed: { frame,
+state }, predicted: { frame, state }, hashAt(frame), stats, report, mode }`; `report.desync`
+counts the room's hash checks (agreed / disagreed). For a ping on a HUD use `report.pingMs` (the
+network round trip to the room, null until known), not the gap between the predicted and confirmed
+frames: that gap is the prediction lead, which also holds the tick an input is aimed at and a
+jitter margin, and reads around 80 ms over the real ping at 30 Hz. `report.leadMs` is that lead
+in ms and `report.marginMs` its safety margin (both null with `inputLead: false`).
+`game.frameView()` returns what onFrame would draw now. A browser game is also on `window.moddioGame`.
+
+Input lead: by default each input is aimed at a frame a lead ahead (a round trip plus a safety
+margin that grows after a late input) and the room holds it until then; that is what prediction
+needs. A game that draws its own player from the room's state (no prediction) should pass
+`inputLead: false` to `playInWorker` / `play`: each input is then sent the moment it changes and the
+room applies it on its next tick, so the delay is one trip there, at most a tick, and one trip back.
+
+Spectators: `watch({ sim, url, room })` (from '@moddio/client') runs the sim on the room's
+ticks and sends nothing that counts. `{ text: 'ask' }` and `{ offer }` effects
+for your player are shown by the play page; the answer comes back as a server event.
+
+Headless (Node, bots, tests): `import { play } from '@moddio/client'` runs Lockstep in-process
+with a sim loaded by `loadSimFile` from '@moddio/sim/node'.
+
+## Shop
+
+Players buy a game's products with their modd.io tokens; the game's creator gets 90% of each
+sale. What a product *is* (an item, a skin, a unit, a potion, an unlock) is entirely the game's
+business: the platform only knows its id, name, price and whether it sells once.
+
+### 1. List what is for sale (moddio.json)
+
+    "products": [
+      { "id": "potion", "name": "Health Potion", "price": 30 },
+      { "id": "gold-skin", "name": "Gold Skin", "price": 400, "once": true,
+        "description": "Shiny.", "image": "assets/skins/gold.png" }
+    ]
+
+Prices are whole tokens, 1 to 1,000,000; at most 500 products. `once: true`: a player buys it
+at most once and owns it for good (skins, unlocks); without it, as often as they like (potions,
+ammo). `image` is a file under assets/. The published moddio.json is the only price list: the
+game names a product by id and never sets a price.
+
+### 2. Sell it (client or sim)
+
+    import { buy } from '@moddio/client/browser';
+    const r = await buy('potion');   // { ok: true, purchase, balance } | { ok: false, cancelled, error }
+
+or from the sim: ctx.out({ offer: 'potion', player }). The game draws its own shop however it
+likes; buy() opens modd.io's purchase dialog, outside the game's frame, with the name and price
+from moddio.json. Only the player's click there buys. buy() resolves once it is all done:
+`ok: true` means the player paid *and the game took the item*; a decline resolves
+`{ ok: false, error }` with the game's reason. Use the result only for the game's UI (close the
+shop, say thanks). Never grant anything from it.
+
+### 3. Give it, and answer (sim)
+
+The item arrives as a server event on a frame every client applies:
+{ type: 'purchased', player, product, purchase, price }. Answer it in the same event() call:
+
+    event(state, e, ctx) {
+      if (e.type !== 'purchased') return;
+      const p = state.players[e.player];
+      if (!p) return ctx.out({ purchase: e.purchase, accept: false, reason: 'You are not in the game' });
+      if (e.product === 'potion') {
+        if (p.bag.length >= 20) return ctx.out({ purchase: e.purchase, accept: false, reason: 'Your bag is full' });
+        p.bag.push('potion');
+      } else if (e.product === 'gold-skin') {
+        p.skins.push('gold'); p.skin = 'gold';       // owned and worn at once
+      } else {
+        return ctx.out({ purchase: e.purchase, accept: false, reason: 'Not sold here any more' });
+      }
+      ctx.out({ purchase: e.purchase, accept: true });
+    }
+
+- Accept once the item is the player's: granted, equipped, whatever the game does with it.
+- Decline when it can't be given (a full bag, a unit that can't hold it, a product the game no
+  longer has). `reason` is shown to the player in the purchase dialog; keep it short.
+- The player is charged only for an accept. A decline, or no answer on that frame, gives the
+  tokens back, and the creator gets nothing. So answer every `purchased` event, on its frame:
+  not later, not from the client, not from server.ts. `moddio test` buys each product once and
+  fails if any goes unanswered.
+- Only the room's copy of the sim counts (it is authoritative), so a client can't fake an answer
+  or an item. The same purchase never arrives twice.
+
+The types are in @moddio/sim: `PurchasedEvent` and `PurchaseAnswer`.
+
+### 4. Keep what was bought `once` (server.ts)
+
+Things bought `once` belong to the player even if a save is lost: grant them again on join.
+room.shop.purchases(player) lists what the player bought and the game took (newest first,
+declined and refunded ones left out):
+
+    async join(player, room) {
+      const owned = (await room.shop.purchases(player)).filter((p) => p.once).map((p) => p.product);
+      room.event({ type: 'owned', player: player.id, products: owned });   // the sim grants these
+    }
+
+Things bought as often as players like (potions) are the game's to keep: put them in the save.
+
+Prices in the game's own currency (gold, points) are game rules: the sim checks and takes them.
+Under `moddio dev`, open /__moddio/play?player=a: buying asks with confirm(), pays nothing, and
+goes through the same answer (the terminal says when the game declined or didn't answer).
+
+## Invites
+
+Players invite friends with the Invite button beside the game. Its link is one short code
+(modd.io/i/x1j3b) that opens the game straight into the inviter's room (server) and, when the
+inviter is signed in, names them. When a friend who came
+through a player's invite link to this game makes a modd.io account and plays for a while, modd.io
+gives both of them tokens, and the game gets a server event in the inviter's room:
+
+    { type: 'invited', player, friend }     // player: the inviter; friend: the friend's id in this game
+
+It arrives once per friend, while the inviter is in one of the game's rooms (the next time they
+are, if they aren't now). The friend may be elsewhere. Give the inviter something in the sim to
+thank them (a skin, an item, coins), and keep it in their save (server.ts) like anything else they
+own:
+
+    event(state, e, ctx) {
+      if (e.type !== 'invited') return;
+      const p = state.players[e.player];
+      if (p) p.skins.push('friend-badge');
+    }
+
+Nothing needs answering. The type is in @moddio/sim: `InvitedEvent`.
+
+Don't make the game's own invite links, codes or "who invited you?" questions: the game never sees
+the page's address, so a code in a link can't reach it, and modd.io already checks that each friend
+is a real new player (a new account, a verified email, play time the room host measured) before
+the event comes. To get players inviting, point them at the Invite button and reward the event.
+
+## Chat and speech bubbles
+
+The room's chat is modd.io's, beside the game (Enter opens it). The game can show its messages,
+for example as speech bubbles over the sender:
+
+    import { onChat } from '@moddio/client/browser';
+    onChat((m) => {               // { id, player, name, text }, each new message as it arrives
+      bubbles.set(m.player, { text: m.text, until: performance.now() + 5000 });
+    });
+    // in draw(): for each live bubble, find the entity whose player id is m.player
+    // (the same "p_..." id the sim uses) and draw m.text above it
+
+The text is already filtered (no links or slurs, swear words starred out), and messages from
+players this player muted never arrive. Messages come to each browser, not through the sim:
+use them for what the player sees, never for game rules or state. The game can't send chat.
+Under `moddio dev`, the play page stand-in has a chat box at the top right (Enter in the game
+focuses it); it reaches every dev tab of the room, and window.moddioChat(text, player?) sends one
+from a script.
+
+## Publishing
+
+`moddio login` (once; the site shows a code to allow), then `moddio publish`: it builds, runs
+`moddio test` on the same bundle, writes it (sim.js, server.js, client/, assets/ under their
+own paths, manifest.json) and uploads it as a new version, together with the game folder's
+source (everything but node_modules, .moddio/, dist/, .git, .env files and keys, and what the
+folder's own .gitignore leaves out), so the game can be changed with AI and copied on modd.io.
+The game's slug is recorded in moddio.json ("game"). `--public` makes the game playable by anyone with the link once the
+version passes review. `--local` only writes the bundle. MODDIO_SITE and MODDIO_TOKEN override the site and
+the token.
+
+## Testing
+
+`moddio test` plays the game with bots (random inputs of your shape, joiners, dropped
+connections, lossy links) and checks that every client's state hash equals the room's on every
+frame; replays the round in V8, JavaScriptCore and SpiderMonkey and checks every tick's hash;
+and reports CPU per tick and per rollback, state size and bandwidth. With a shop, one bot
+buys every product once mid-match: each `purchased` event must be answered on its frame. A mismatch means the sim
+is not deterministic: look for randomness or time, iteration order that depends on history,
+or state kept outside the state object (module-level variables).
+
+`moddio play` shows what players see: the game served as on modd.io (its CSP, the play page's
+sandboxed frame) in headless Chromium, 1 to 4 players (`--players`), for `--seconds` of play
+(default 10, at most 120, counted once everyone joined). Each player can follow a script of
+steps (`--script`, JSON or a file: one array for every player, or an array of arrays):
+`{"wait":ms}`, `{"down":"d"}`, `{"up":"d"}`, `{"press":"Space"}`, `{"type":"text"}`,
+`{"move":[x,y]}`, `{"click":[x,y],"button":"left"}`, `{"mousedown":[x,y]}`, `{"mouseup":[x,y]}`,
+`{"shot":"label"}`; x,y are CSS pixels in the 960x600 game frame. `--shots 2,5` adds screenshots
+at those seconds; one is taken at the end. It writes .moddio/play/<run>/: p1-<label>.png, p1-console.log
+(console, uncaught errors, workers), room.log and summary.json, and prints the paths, frames,
+errors, and anything the game tried to reach outside its files and room (refused, as on modd.io).
+
+    npx moddio play --players 2 --seconds 8 --shots 3 --script '[[{"down":"d"},{"wait":2000},{"up":"d"},{"click":[480,300]}],[]]'
