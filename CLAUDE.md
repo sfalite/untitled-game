@@ -1,31 +1,30 @@
 # Chaos City.io — modd.io multiplayer game
 
-This repository is a 2D top-down multiplayer city game using the modd.io SDK. Read `llms.txt` before making SDK changes; it is the project's SDK reference.
+This repository is a 2D top-down city game using the modd.io SDK. Read `llms.txt` before SDK changes.
 
 ## Architecture
 
-- `sim.ts`: deterministic shared simulation with Planck/Box2D-style physics for oriented player bodies, buildings, trees, movable props and physical debris, plus weapons, projectiles, health, respawn and scoring.
-- `server.ts`: optional room hooks; keep platform saves/network authority in the modd.io SDK.
-- `client/main.ts`: renderer, menu/server picker, camera, HUD, controls, inventory, player and object rendering.
-- `client/index.html`: game entry point.
-- `assets/tilesheet_complete.png`: supplied 64x64 tile atlas (27 columns x 20 rows).
-- `assets/player.png`: supplied 43x35 top-down character sprite.
-- `assets/trees/tree.png`: supplied 128x128 green tree sprite, rendered as the foreground tree layer.
-- `assets/audio/fire_rifle.mp3`: trimmed, per-shot sound for AK-47 and M249; original source is preserved under `assets/audio/originals/`.
-- `assets/audio/fire_minigun.mp3`: trimmed, per-shot sound for M134 Minigun; original source is preserved under `assets/audio/originals/`.
-- `assets/audio/fire_shotgun.mp3`: per-shot sound for Shotgun.
-- `moddio.json`: preserve its existing `game` slug when changing the game.
+- `sim.ts`: deterministic shared simulation, Planck/Box2D bodies, authoritative projectiles, collision/damage, inventory, object health, death and respawn.
+- `server.ts`: optional room hooks; use the modd.io platform for networking and authority.
+- `client/main.ts`: canvas renderer, menu/server picker, camera, FPS/ping HUD, minimap, inventory, controls, weapon audio, and local predicted shooting visuals.
+- `assets/`: all images and audio are bundled locally; do not fetch from third-party hosts.
 
-## Required behaviour
+## Current gameplay constraints
 
-- Keep all visible game UI in English.
-- Keep the first screen as a custom menu (`"menu": true`) with region/server list from `pageRooms()`, a green Play button, and a Create New Server option where region switching is supported.
-- Pressing M during a match leaves the room and returns to the custom menu.
-- Keep camera tracking the local player at a moderate responsive zoom.
-- Keep four inventory slots (AK-47, M249, M134 Minigun, Shotgun); keys 1–4 choose the item and the weapon sprite is anchored at the right hand in player-local coordinates. The supplied 43×35 sprite faces up, so render the sprite/weapon with `aimAngle + Math.PI / 2`, while projectiles use `aimAngle` directly. Keep the muzzle spark aligned with the same hand/muzzle anchor.
-- Keep the green rounded 100/100 health UI centered near the bottom, with inventory above it.
-- Maintain touch controls and a readable HUD on narrow screens.
+- Keep visible UI in English and support keyboard, mouse and touch.
+- Custom main menu (`"menu": true`) uses `pageRooms()` / `joinRoom()` / `switchRoom()`; M returns to the menu.
+- World size is 2688×2688; roads remain unmarked. Keep client and sim building/tree/prop layouts synchronized. Tree art is 128×128, but trunk collision is only a 15×15 circle. Player artwork and physics box are 43×35.
+- Five inventory slots: Glock-17 starts in slot 1; AK-47, M249, M134 Minigun and Shotgun are collectible; remaining slots start empty. E picks up, G drops, empty slots punch. Standard props have 20 HP; cars 200 HP.
+- Weapon audio uses `fire_pistol.mp3` for Glock, `fire_rifle.mp3` for AK/M249, `fire_minigun.mp3` for M134, and `fire_shotgun.mp3` for Shotgun.
 
-## Determinism and testing
+## Prediction, firing and networking
 
-`sim.ts` must not use `Math.random`, wall-clock time, timers, fetch, DOM or browser APIs. Use `ctx.rng()` / `ctx.int()` and `ctx.frame` instead. Keep player iteration sorted and state as plain serializable data. Physics uses `@moddio/sim/planck`; maintain the metre scale at 32 pixels per metre and the `canonicalEvery = 100` rollback safeguard unless official SDK tests show it should change. Run `npx moddio test` after each simulation change, then `npx moddio play --players 2 --seconds 15 --shots 5,10` to review the browser sandbox. Do not publish until the official tests pass.
+- Keep `predict: 'self'`; remote players use SDK interpolation. Whole-world prediction previously showed remote player snapping.
+- The input shape includes `shotToken: u32`, which advances for each locally predicted firing interval. The sim accepts at most one bullet burst per new token, and each bullet stores its token and pellet index.
+- Local sound, muzzle flash and tracer can appear immediately, but only the authoritative sim decides collisions and damage. Match local tracers to server bullets by `(owner, shotToken, pelletIndex)` rather than approximate spatial matching. After association, render the projectile along its own fixed-velocity path; never move it toward the shooter's current muzzle.
+- Client and sim must share muzzle offsets, projectile speed, cooldown, lifetime and shotgun fan. Single projectiles follow aim exactly; shotgun uses the same deterministic symmetric pellet fan in both places.
+- Do not set `inputLead: false` as a generic latency fix. That mode is documented for games which draw the player only from room state and do not predict locally. Client-side feedback can reduce perceived firing delay, but cannot reduce physical ping or server-authoritative hit-confirmation time.
+
+## Determinism and test requirements
+
+`sim.ts` must not use `Math.random`, wall-clock time, timers, fetch, DOM or browser APIs. Use `ctx.rng()` / `ctx.int()` and `ctx.frame` for deterministic behavior. Iterate players in sorted order and keep state as plain serializable data. Preserve the Planck metre scale of 32 pixels per metre and `canonicalEvery = 100` unless official SDK tests justify a change. Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3,5`, then test two live browser clients. Do not publish before official checks pass; accurately distinguish local static checks from SDK/runtime tests.

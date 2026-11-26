@@ -1,46 +1,45 @@
-# Chaos City.io — Update v7
+# Chaos City.io — Update v16
 
-This package updates the existing modd.io SDK game while preserving its game slug and bundled assets.
+This package updates the existing modd.io SDK project while preserving its game slug and bundled assets.
 
-## Changes in this update (v7)
+## Changes in this update (v16)
 
-- Moved the full-city minimap to the lower-right corner with a consistent 12px panel margin. On touch devices it remains in the lower-right area, above the on-screen control strip to avoid blocking it.
-- Added a compact HUD panel immediately beside TOP CHAOS showing locally measured render FPS and the modd.io SDK room round-trip ping in milliseconds (`report.pingMs`). FPS is sampled over 500ms windows; ping is refreshed every 500ms and shows `--` until the SDK reports a valid value.
-- Reset the FPS sampling window when a new room connects so time spent in the main menu does not distort the initial reading.
+- Kept `predict: 'self'` to preserve local-player prediction and the SDK's normal interpolation for remote players. Do not switch back to whole-world prediction as a quick fix: this project previously showed remote-player snapping under `predict: 'world'`.
+- Local firing feedback is predicted immediately: muzzle flash, one-shot audio, and a provisional projectile render on the input frame. Damage and collisions remain authoritative in `sim.ts`; client prediction never grants a hit.
+- Added a `shotToken: u32` to the typed SDK input. The client advances this token once per predicted firing interval; the sim only emits one gunshot for a new token and stores the token and pellet index on each authoritative bullet.
+- Reconciles a predicted tracer with the authoritative projectile using the exact `(owner, shotToken, pelletIndex)` identity, not a nearest-position/angle heuristic. That avoids matching an automatic-fire bullet to the wrong shot when network updates arrive late.
+- Stopped drawing a blended muzzle-offset correction after authority arrives. Confirmed bullets are rendered along their own fixed-velocity trajectory, extrapolated only by their own age; they are never reattached to the shooter's current hand/muzzle.
+- Single-projectile weapons use the cursor angle exactly; the shotgun uses a deterministic symmetric pellet fan. Client prediction and sim use the same speed, lifetime, muzzle point, cooldown, and pellet fan.
+- Local shot audio plays on input and uses the confirmed `lastFiredClientShotToken` to avoid duplicate playback. The pistol, rifle, minigun, and shotgun samples remain mapped to the Glock-17, AK-47/M249, M134, and Shotgun respectively.
+- Bumped the deterministic sim version to `20` and kept prop durability at 20 HP for ordinary objects and 200 HP for cars.
 
+## Important latency note
 
-- Tree art remains 128×128, while the tree trunk collider is now a 15×15 circle (7.5 px radius).
-- Bullets use swept segment collision per simulation tick against buildings, tree trunks, props, and rotated player hitboxes. This prevents fast projectiles from tunnelling through targets between ticks.
-- Player collision uses relative motion (previous pose to current pose), so bullets can hit a moving player even when the player moves during the same simulation frame.
-- Spawn protection suppresses damage during its brief duration but still blocks the projectile. Bullets no longer visually pass through a protected player and hit someone behind them.
-- A newly created bullet remains at its true muzzle origin for its first rendered frame. The client applies a small local prediction correction only to the first two visual frames of the local player's bullet; the server-simulated trajectory and damage are unchanged.
-- Added a full-city minimap showing the road/building layout and the local player's marker only. It intentionally does not show other players, bullets, or movable props.
-- Removed unused point-only collision helpers now replaced by swept collision helpers.
-- Simulation version is bumped to `10`.
+The local sound/flash/tracer are immediate to reduce *perceived* firing delay. Actual server-authoritative damage still depends on the connection's round-trip time and server input scheduling. Code cannot make a European server physically closer or reduce the measured network ping; do not disable `inputLead` as a generic fix because the SDK documents it for no-prediction games.
 
 ## Key files
 
-- `sim.ts`: deterministic simulation, Planck/Box2D bodies, projectile movement and hit detection.
-- `client/main.ts`: rendering, recent local bullet visual alignment, HUD and minimap.
-- `assets/player.png`: original 43×35 player sprite.
-- `assets/trees/tree.png`: 128×128 tree sprite.
-- `assets/tilesheet_complete.png`: supplied tile atlas.
-- `assets/audio/`: included weapon and death sound effects.
+- `sim.ts`: deterministic shared simulation, Planck/Box2D bodies, shot tokens, authoritative projectiles and collision/damage.
+- `client/main.ts`: menu, controls, local input feedback, shot-token reconciliation, renderer, HUD and minimap.
+- `assets/player.png`: supplied 43×35 player sprite.
+- `assets/trees/tree.png`: supplied 128×128 tree artwork; trunk collision is a 15×15 circle.
+- `assets/tilesheet_complete.png`: supplied 64×64 tile atlas.
+- `assets/audio/`: bundled weapon and death sound effects.
 
 ## Apply and test
 
-Copy the package contents over the matching files in the existing game repository. Preserve `llms.txt`, `tsconfig.json`, `.gitignore` and other project settings that are not included in this package. Keep the existing game slug in `moddio.json`.
+Copy the package contents over the matching files in the existing game repository. Preserve `llms.txt`, `tsconfig.json`, `.gitignore`, and other settings that are not included in this package. Keep the existing game slug in `moddio.json`.
 
 Run from the project folder with Node.js 22 or later:
 
 ```sh
 npm install
 npx moddio test
-npx moddio play --players 2 --seconds 8 --shots 3
+npx moddio play --players 2 --seconds 8 --shots 3,5
 npx moddio dev
 ```
 
-Before publishing, test with two players, especially automatic-weapon fire, hits on moving players, spawn protection, wall/tree blocking, and minimap position. The local checks documented in `TEST-REPORT.md` are not a replacement for the official SDK test or a real-browser multiplayer test.
+Before publishing, test sustained AK-47/M249 fire, Glock fire while moving and turning, switching weapons, dropping while firing, shotgun pellets, hits on moving targets, and a two-player browser session. Local TypeScript/static checks are not a replacement for the official SDK test or a live network multiplayer test.
 
 
 ## Update v8 — Menu, larger city and five-slot inventory

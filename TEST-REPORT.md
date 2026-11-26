@@ -124,3 +124,17 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3`,
 - Verified `propMaxHealth` returns 20 for crate/bin/hydrant/cone/bench and 200 for cars; client health-bar maximums match.
 - Simulation version bumped to 17.
 - TypeScript no-emit compilation and package integrity checks were run locally. The actual modd.io runtime was unavailable, so official SDK tests and a live multiplayer session were not run here.
+
+
+## Update v16 — shot-token matching and reduced perceived firing delay
+
+### Local checks performed
+- TypeScript no-emit compilation passed for `sim.ts`, `server.ts`, and `client/main.ts` using temporary ambient declarations for SDK modules.
+- Static checks confirmed `predict: 'self'` remains enabled, `inputLead: false` is not used, the firing input carries `shotToken: u32`, and the sim tags authoritative bullets with `shotToken` plus `pelletIndex`.
+- Checked that the client matches local predicted tracers by the exact shot token and pellet index, not by proximity, current muzzle position, or angle heuristics. Confirmed projectiles are rendered on their own straight authoritative trajectory after association.
+- Checked the client and simulation use the same muzzle offsets, projectile speeds/lifetimes/cooldowns, and deterministic shotgun pellet fan. The render-only tracer still does not apply damage.
+- Verified `moddio.json` still points at the existing game slug, required image/audio assets exist, and the package ZIP passed integrity checks.
+
+### Not performed
+- Official `npx moddio test`, `npx moddio play`, and the actual Planck adapter inside the modd.io runtime.
+- Live browser multiplayer test with two clients. The client-side tracer and sound should reduce perceived local feedback delay, but authoritative hit confirmation and real network ping still depend on the connection and server region.

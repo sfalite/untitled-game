@@ -156,13 +156,14 @@ type Player = {
   /** Selected inventory slot (0-4). Actual weapon IDs live in inventory. */
   weapon: number; inventory: Array<number | null>;
   fire: boolean; smash: boolean; pickup: boolean; drop: boolean;
+  clientShotToken: number; lastFiredClientShotToken: number;
   pickupWasDown: boolean; dropWasDown: boolean;
   fireCooldown: number; smashCooldown: number; punchCooldown: number; punchFlash: number;
   score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number; shotWeapon: number;
   deathSeq: number; deathX: number; deathY: number;
 };
 type WeaponPickup = { id: number; x: number; y: number; weaponId: number; angle: number; createdFrame: number };
-type Bullet = { id: number; owner: string; x: number; y: number; weaponId: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
+type Bullet = { id: number; owner: string; shotSeq: number; shotToken: number; pelletIndex: number; x: number; y: number; weaponId: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
 type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
 type State = {
   players: Record<string, Player>; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[];
@@ -462,7 +463,7 @@ function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '17',
+  version: '20',
   tickRate: 20,
   maxPlayers: 32,
   // Predict only the local player. The SDK interpolates remote players from authoritative
@@ -470,7 +471,7 @@ export default defineSim({
   // are corrected after rollback. Bullets stay authoritative and are never reattached to a muzzle.
   predict: 'self',
   physics: box2dPhysics,
-  input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', buttons: { flags: ['fire', 'smash', 'pickup', 'drop'] } },
+  input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', shotToken: 'u32', buttons: { flags: ['fire', 'smash', 'pickup', 'drop'] } },
 
   fingerprint(state, id, { physics }) {
     const player = state.players[id];
@@ -502,6 +503,7 @@ export default defineSim({
     state.players[id] = {
       name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y, prevX: spawn.x, prevY: spawn.y, body,
       move: [0, 0], aimAngle: 0, weapon: 0, inventory: [0, null, null, null, null], fire: false, smash: false, pickup: false, drop: false,
+      clientShotToken: 0, lastFiredClientShotToken: 0,
       pickupWasDown: false, dropWasDown: false,
       fireCooldown: 0, smashCooldown: 0, punchCooldown: 0, punchFlash: 0, score: 0, health: 100, invulnerable: 45,
       color: ctx.int(6), muzzleFlash: 0, shotSeq: 0, shotWeapon: 0,
@@ -522,6 +524,7 @@ export default defineSim({
     p.move = [input.move[0] / 127, input.move[1] / 127];
     p.aimAngle = (input.aim / 65535) * Math.PI * 2;
     p.weapon = Math.max(0, Math.min(4, input.weapon | 0));
+    p.clientShotToken = Math.max(0, Number(input.shotToken) >>> 0);
     p.fire = !!input.buttons.fire;
     p.smash = !!input.buttons.smash;
     p.pickup = !!input.buttons.pickup;
@@ -668,17 +671,25 @@ export default defineSim({
           break;
         }
       }
-      if (p.fire && typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPONS.length && p.fireCooldown <= 0 && state.bullets.length < 350 && !p.drop) {
+      if (p.fire && typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPONS.length && p.fireCooldown <= 0 && state.bullets.length < 350 && !p.drop && p.clientShotToken !== p.lastFiredClientShotToken) {
         const weapon = WEAPONS[equippedWeaponId];
         const muzzle = muzzlePosition(p, equippedWeaponId);
         p.fireCooldown = weapon.cooldown;
         p.muzzleFlash = 2;
         p.shotWeapon = equippedWeaponId;
         p.shotSeq++;
+        p.lastFiredClientShotToken = p.clientShotToken;
+        const shotSeq = p.shotSeq;
         for (let pellet = 0; pellet < weapon.pellets && state.bullets.length < 350; pellet++) {
-          const a = p.aimAngle + (ctx.rng() - 0.5) * weapon.spread;
+          // Deterministic spread is shared with the client-side visual prediction. Single-shot
+          // weapons follow the cursor exactly; the shotgun uses a stable, symmetric pellet fan.
+          // This avoids random client tracers being associated with the wrong authoritative path.
+          const spreadOffset = weapon.pellets > 1
+            ? ((pellet / (weapon.pellets - 1)) - 0.5) * weapon.spread
+            : 0;
+          const a = p.aimAngle + spreadOffset;
           state.bullets.push({
-            id: state.nextBulletId++, owner: id,
+            id: state.nextBulletId++, owner: id, shotSeq, shotToken: p.clientShotToken, pelletIndex: pellet,
             x: muzzle.x, y: muzzle.y,
             weaponId: equippedWeaponId,
             vx: Math.cos(a) * weapon.speed, vy: Math.sin(a) * weapon.speed,
