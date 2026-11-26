@@ -174,3 +174,12 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3`,
 ### Not performed
 - Official `npx moddio test` / `npx moddio play` with the installed production SDK.
 - Live browser multiplayer testing. Server-side input ordering and remote room reconciliation should be confirmed in the real modd.io runtime.
+
+
+## Update v19 — duplicate visual bullet fix
+
+- Reworked bullet rendering to guarantee one display source per projectile owner on each client: local-owner shots show the immediate locally predicted tracer only; remote-owner shots show the interpolated authoritative state only.
+- Removed local tracer-to-authoritative matching by numeric `shotToken` and bullet id, which was unreliable because the SDK interpolates numeric state fields between snapshots. The local-authoritative visual is now always skipped, preventing a predicted and authoritative copy from being shown together.
+- Kept client-side swept clipping for local predicted tracers and remote authoritative projectile segments. `sim.ts` remains the only authority for collisions, damage, and removing projectiles.
+- Preserved shot-token input and server gating, and preserved immediate local muzzle flash/audio.
+- TypeScript syntax and source assertions passed; `npx moddio test`, `npx moddio play`, and live browser testing with two players were not run in this environment.

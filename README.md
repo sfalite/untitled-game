@@ -1,4 +1,4 @@
-# Chaos City.io — Update v16
+# Chaos City.io — Update v19
 
 This package updates the existing modd.io SDK project while preserving its game slug and bundled assets.
 
@@ -152,3 +152,17 @@ Local TypeScript and collision-helper tests passed. The official modd.io test an
 - Client prediction no longer keeps an unmatched tracer visible after its shot token is already confirmed by the room, preventing a provisional tracer and a confirmed projectile from appearing together.
 - Local fire state resets when the game worker is started again. Mouse presses are classified as gameplay or inventory/UI clicks at their initial press coordinate and stay in that category until release.
 - Official modd.io CLI/runtime multiplayer testing remains necessary.
+
+
+## Update v19 — single visual tracer per local shot
+
+- Fixed the remaining duplicate-bullet visual by using a single rendering source per owner per client: the local player's own immediate, collision-clipped predicted tracer; for other players, the interpolated authoritative bullet. The local player's authoritative copy is intentionally not drawn in the local browser, so the predicted and authoritative forms cannot overlap or appear as two bullets.
+- Removed the shot-token/authoritative-ID matching from the tracer renderer. This avoids relying on numeric identifier fields that may be interpolated between snapshots. Shot tokens remain in the input and simulation to prevent duplicate authoritative shot events.
+- The predicted tracer remains render-only; sim.ts still owns projectile collision, hit detection, damage, bullet lifetime and removal. Client-side segment clipping is kept to prevent local visuals from passing through scene blockers.
+- Local muzzle flash and sound remain immediate. Remote players' bullets remain rendered from the modd.io room's interpolated authoritative state.
+
+### Checks and limitations
+- TypeScript no-emit compilation passed using temporary module declarations for the SDK.
+- Static/source checks confirmed local-owner authoritative bullets are skipped by the renderer, predicted local tracers are drawn once, remote authoritative bullets are drawn once, and the server's shot-token guard is preserved.
+- ZIP integrity and required asset paths were checked.
+- Official `npx moddio test` and a live browser multiplayer session were not run here; test with two players before publishing.
