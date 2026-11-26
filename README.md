@@ -1,38 +1,40 @@
-# Chaos City.io — aim and collider fix
+# Chaos City.io — Update v4
 
-This package builds on the supplied modd.io project and adds the requested player aiming, hand-anchored weapons, weapon audio and physics changes.
+This update targets three presentation/feel bugs: the white ring around the local player, oversized square tree hitboxes, and automatic-weapon audio that repeated only after the full multi-second recording ended. It also removes tile-edge seams caused by separately resampling every tile at fractional zoom.
 
-## Included changes
+## Changes
 
-- The player uses the supplied `assets/player.png` at its exact source size of 43×35 world pixels.
-- The sprite faces up at rest; visual rotation applies the required +90° offset. The mouse position is converted by explicitly inverting the camera transform, so aiming stays correct at different zooms and at map edges.
-- Fixed the local prediction merge: player position fingerprints are converted from Planck metres back to game pixels, and `aimAngle` is stored separately from the body's physical `angle`. This prevents the local player's renderer from reading physics radians/units as its cursor aim/pixel coordinates.
-- Weapons are drawn in the sprite's local facing-up space and anchored at its right-hand point. The item position and angle therefore rotate together with the player.
-- `assets/audio/fire_rifle.mp3` is used while firing the AK-47 or M249; `fire_minigun.mp3` while firing the M134; `fire_shotgun.mp3` on each shotgun shot.
-- A short, locally rendered muzzle spark appears at the weapon muzzle on fire frames.
-- Player physics hitbox is an oriented 43×35 rectangle matching `assets/player.png`; the sprite is drawn at the same 43×35 world-pixel size. Trees are drawn at their native 128×128 size and use matching 128×128 static Box2D colliders. Dynamic prop colliders match the rendered art bounds (car 60×32, bench 34×26, crate 50×50, hydrant 26×29, cone 30×32, bin 26×29), and bullets test rotated boxes rather than coarse circles.
-- The simulation uses the modd.io `@moddio/sim/planck` adapter (Planck/Box2D-style physics) for players, city buildings, trees, movable props and debris. Physics units are scaled at 32 pixels per metre, densities, friction, restitution and damping vary by entity type, the local player has a body-pose prediction fingerprint, and the Planck world is canonicalised every 100 frames to reduce contact-cache desynchronisation.
-- Movement, collision and prop poses remain in the deterministic sim. The client only renders the state and plays local audio.
+- Removed the local-player white outline circle. The mouse reticle remains separate and still follows the cursor.
+- Tree art remains at its native 128×128 size. Each tree now has only a 40×40 circular trunk collider (radius 20 world pixels), used for physics, projectile collision, and spawn clearance; the canopy is non-solid.
+- The base floor is drawn once into a contiguous offscreen canvas and then viewed through the camera, rather than scaling many adjacent tiles independently. Pixel smoothing is disabled for the world layer to reduce visible seams.
+- AK-47/M249 and M134 audio are triggered by each new simulation `shotSeq`, with small multi-voice pools so rapid shots can overlap without waiting for a 2.3-second clip to finish. The automatic weapon samples are trimmed to the transient plus a short fade; complete originals are preserved in `assets/audio/originals/`.
+- Shotgun keeps the same original sample and per-shot playback behavior.
+- Simulation version bumped to `5`; the existing modd.io game slug remains unchanged.
 
-## Local assets
+## Assets
 
-- `assets/tilesheet_complete.png`: original 1728×1280 atlas.
-- `assets/player.png`: supplied 43×35 player sprite.
-- `assets/trees/tree.png`: supplied 128×128 tree sprite.
-- `assets/audio/`: the three provided MP3 sound effects.
+- `assets/player.png`: original 43×35 sprite.
+- `assets/trees/tree.png`: 128×128 tree artwork.
+- `assets/tilesheet_complete.png`: supplied tile atlas.
+- `assets/audio/fire_rifle.mp3`, `fire_minigun.mp3`, `fire_shotgun.mp3`: in-game audio.
+- `assets/audio/originals/`: original untrimmed rifle and minigun MP3s, kept as backups.
 
-All game assets are loaded from the project's own files; there are no external asset URLs.
+## Local verification
 
-## Test locally
+- TypeScript source check: passed using temporary declarations for modd.io modules; this checks syntax and local types but is not the SDK's official checker.
+- Asset-path checks: passed.
+- Audio duration check: rifle and minigun clips are now short one-shot samples; shotgun sample was left unchanged.
+- Zip integrity check: passed.
 
-Use Node.js 22 or newer in this project folder:
+The actual modd.io runtime test (`npx moddio test`) and browser test (`npx moddio play --players 2`) still need to be run in the project with working SDK dependencies. Do not treat the local check as proof of the real physics/network runtime.
 
-```sh
+## Test in the project
+
+```bash
 npm install
 npx moddio test
+npx moddio play --players 2 --seconds 8 --shots 3
 npx moddio dev
 ```
 
-Open two dev players as described in `llms.txt`; verify that movement collides with walls, players can push props, debris settles and collides, the local and remote players rotate toward the mouse, the weapon stays on the right-hand anchor at all angles, native-size colliders block/overlap correctly, and each weapon uses its assigned sound. Test mouse, keyboard and touch before publishing.
-
-The official modd.io test should be run after installing the actual SDK dependencies. A local TypeScript syntax check is not a substitute for the platform's deterministic replay and browser sandbox tests.
+Check that only the tree trunks block movement, bullets hit the trunk circle, floor seams are absent at the current zoom and after resizing, the local-player ring is gone, and every rapid-fire shot produces a timely sound. Test at least two players and touch controls before publishing.

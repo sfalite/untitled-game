@@ -50,11 +50,11 @@ const BUILDINGS: Rect[] = [
   {x:858,y:1240,w:170,h:180,color:'#c78b4a',style:0}, {x:1240,y:1240,w:170,h:180,color:'#8b9fa0',style:2},
   {x:1610,y:1240,w:120,h:180,color:'#d47b37',style:3},
 ];
-type Tree = { x: number; y: number; r: number }; // r is half-width/half-height; tree sprite is 128x128.
+type Tree = { x: number; y: number; r: number }; // r is the circular trunk radius in world pixels (20px, 40px diameter).
 const TREES: Tree[] = [
-  {x:320,y:292,r:64},{x:704,y:292,r:64},{x:1092,y:292,r:64},{x:1476,y:292,r:64},
-  {x:320,y:664,r:64},{x:704,y:664,r:64},{x:1092,y:664,r:64},{x:1476,y:664,r:64},
-  {x:320,y:1048,r:64},{x:704,y:1048,r:64},{x:1092,y:1048,r:64},{x:1476,y:1048,r:64},
+  {x:320,y:292,r:20},{x:704,y:292,r:20},{x:1092,y:292,r:20},{x:1476,y:292,r:20},
+  {x:320,y:664,r:20},{x:704,y:664,r:20},{x:1092,y:664,r:20},{x:1476,y:664,r:20},
+  {x:320,y:1048,r:20},{x:704,y:1048,r:20},{x:1092,y:1048,r:20},{x:1476,y:1048,r:20},
 ];
 
 type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
@@ -62,7 +62,7 @@ type Prop = { id: number; x: number; y: number; kind: PropKind; active: boolean;
 type Player = {
   name: string; x: number; y: number; body: number; move: [number, number]; aimAngle: number;
   weapon: number; fire: boolean; smash: boolean; fireCooldown: number; smashCooldown: number;
-  score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number;
+  score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number; shotWeapon: number;
 };
 type Bullet = { id: number; owner: string; x: number; y: number; vx: number; vy: number; damage: number; life: number; color: string };
 type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
@@ -90,7 +90,11 @@ function circleHitsRect(x: number, y: number, r: number, b: { x: number; y: numb
 }
 function blocked(x: number, y: number): boolean {
   if (BUILDINGS.some((b) => circleHitsRect(x, y, PLAYER_SPAWN_R, b))) return true;
-  return TREES.some((t) => circleHitsRect(x, y, PLAYER_SPAWN_R, { x: t.x - t.r, y: t.y - t.r, w: t.r * 2, h: t.r * 2 }));
+  return TREES.some((t) => {
+    const dx = x - t.x, dy = y - t.y;
+    const combinedRadius = PLAYER_SPAWN_R + t.r;
+    return dx * dx + dy * dy < combinedRadius * combinedRadius;
+  });
 }
 function openSpawn(ctx: any, state?: any, excludedPlayer = ''): {x:number;y:number} {
   for (let tries = 0; tries < 100; tries++) {
@@ -131,7 +135,8 @@ function makeMapPhysics(world: any): void {
   for (const b of BUILDINGS) makeStaticBox(world, b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0.9);
   for (const t of TREES) {
     const body = world.createBody({ type: 'static', position: pl.Vec2(t.x / PPM, t.y / PPM) });
-    body.createFixture(pl.Box(t.r / PPM, t.r / PPM), { density: 0, friction: 0.9, restitution: 0.02 });
+    // Artwork remains 128x128, but only the visible trunk blocks movement: a 40x40 circle.
+    body.createFixture(pl.Circle(t.r / PPM), { density: 0, friction: 0.9, restitution: 0.02 });
   }
   // Invisible Box2D walls keep bodies inside the city bounds.
   makeStaticBox(world, -20, H / 2, 20, H / 2 + 30, 0.9);
@@ -169,6 +174,10 @@ function propPoints(kind: PropKind): number { return kind === 'car' ? 35 : kind 
 function propRadius(kind: PropKind): number {
   const cfg = propPhysics(kind);
   return Math.sqrt(cfg.hx * cfg.hx + cfg.hy * cfg.hy);
+}
+function pointHitsCircle(x: number, y: number, cx: number, cy: number, radius: number): boolean {
+  const dx = x - cx, dy = y - cy;
+  return dx * dx + dy * dy <= radius * radius;
 }
 function pointHitsOrientedBox(x: number, y: number, cx: number, cy: number, angle: number, hx: number, hy: number): boolean {
   const dx = x - cx, dy = y - cy;
@@ -226,7 +235,7 @@ function muzzlePosition(p: Player): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '4',
+  version: '5',
   tickRate: 20,
   maxPlayers: 32,
   physics: box2dPhysics,
@@ -263,7 +272,7 @@ export default defineSim({
       name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y, body,
       move: [0, 0], aimAngle: 0, weapon: 0, fire: false, smash: false,
       fireCooldown: 0, smashCooldown: 0, score: 0, health: 100, invulnerable: 45,
-      color: ctx.int(6), muzzleFlash: 0, shotSeq: 0,
+      color: ctx.int(6), muzzleFlash: 0, shotSeq: 0, shotWeapon: 0,
     };
   },
 
@@ -361,6 +370,7 @@ export default defineSim({
         const muzzle = muzzlePosition(p);
         p.fireCooldown = weapon.cooldown;
         p.muzzleFlash = 2;
+        p.shotWeapon = p.weapon;
         p.shotSeq++;
         for (let pellet = 0; pellet < weapon.pellets && state.bullets.length < 350; pellet++) {
           const a = p.aimAngle + (ctx.rng() - 0.5) * weapon.spread;
@@ -379,7 +389,7 @@ export default defineSim({
       b.x += b.vx; b.y += b.vy; b.life--;
       if (b.life <= 0 || b.x < 0 || b.y < 0 || b.x > W || b.y > H) continue;
       if (BUILDINGS.some((building) => b.x >= building.x && b.x <= building.x + building.w && b.y >= building.y && b.y <= building.y + building.h)) continue;
-      if (TREES.some((tree) => pointHitsOrientedBox(b.x, b.y, tree.x, tree.y, 0, tree.r, tree.r))) continue;
+      if (TREES.some((tree) => pointHitsCircle(b.x, b.y, tree.x, tree.y, tree.r))) continue;
 
       let hitProp = false;
       for (const prop of state.props) {

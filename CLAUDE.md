@@ -11,8 +11,8 @@ This repository is a 2D top-down multiplayer city game using the modd.io SDK. Re
 - `assets/tilesheet_complete.png`: supplied 64x64 tile atlas (27 columns x 20 rows).
 - `assets/player.png`: supplied 43x35 top-down character sprite.
 - `assets/trees/tree.png`: supplied 128x128 green tree sprite, rendered as the foreground tree layer.
-- `assets/audio/fire_rifle.mp3`: looping firing sound for AK-47 and M249.
-- `assets/audio/fire_minigun.mp3`: looping firing sound for M134 Minigun.
+- `assets/audio/fire_rifle.mp3`: trimmed, per-shot sound for AK-47 and M249; original source is preserved under `assets/audio/originals/`.
+- `assets/audio/fire_minigun.mp3`: trimmed, per-shot sound for M134 Minigun; original source is preserved under `assets/audio/originals/`.
 - `assets/audio/fire_shotgun.mp3`: per-shot sound for Shotgun.
 - `moddio.json`: preserve its existing `game` slug when changing the game.
 

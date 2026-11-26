@@ -1,15 +1,15 @@
-# Chaos City.io — aim and collider fix verification
+# Chaos City.io — Update v4 verification report
 
-## Completed checks
+## Passed locally
 
-- TypeScript syntax/type pass completed with `tsc --noEmit` and temporary ambient declarations for the modd.io modules. This is a local source check, not the official SDK type checker.
-- The local prediction fingerprint now converts Planck positions (metres) into the same world-pixel units used by `Player.x` and `Player.y`; it preserves the physical body angle separately from `aimAngle`. This resolves the local-player self-merge unit/angle mismatch that could make the camera and mouse aiming appear not to follow the pointer.
-- Cursor-to-world conversion now inverts the exact draw transform: `world = camera + screen / zoom`. Cardinal direction checks confirm the up-facing sprite with a +90-degree offset points right, down, left, and up at the corresponding cursor directions.
-- Player collider and draw size are both 43×35 world pixels. Tree artwork/collider are both 128×128. Object fixtures align to their rendered dimensions: car 60×32, bench 34×26, crate 50×50, hydrant 26×29, cone 30×32 and bin 26×29. Projectile checks now use oriented rectangles for trees, props, and players.
-- Checked initial prop locations: no overlap among starting props, native-size tree colliders, or building rectangles.
-- Confirmed the three weapon MP3 files and the supplied player/tree/tile assets remain bundled under relative project paths.
-- `moddio.json` remains valid and preserves the existing game slug `untitled-game-b8a1fb`; sim version was bumped to `4`.
+- `tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM --skipLibCheck --strict false` passed for `sim.ts` and `client/main.ts` using temporary ambient declarations for modd.io imports.
+- Tree definitions use radius 20 px. Static tree colliders use `pl.Circle(20 / PPM)`, spawn clearance treats the trunk as a circle, and projectile collision uses circle distance against the same radius.
+- Removed the white outline circle drawn around the local player. The cursor reticle is unchanged.
+- Base floor tile art is cached once in an offscreen canvas and displayed as one contiguous image, avoiding independently scaled tile edges.
+- Automatic weapon audio is no longer looped. New `shotSeq` values trigger the correct one-shot sound using the `shotWeapon` captured in the deterministic simulation. Rifle/minigun samples are short trimmed transients; original versions are backed up.
+- Shotgun sample and firing-sound mapping were not changed.
+- ZIP file integrity and expected asset paths passed checks.
 
-## Still required in the actual modd.io runtime
+## Not verified here
 
-The official `npx moddio test` and `npx moddio play --players 2` could not be run here because the actual npm SDK dependency installation previously failed to resolve the npm registry (`EAI_AGAIN`). Before publishing, test local-player aiming, remote-player aiming, hand alignment at all four cardinal directions, collisions near buildings/trees, touch controls, and cross-engine deterministic physics using the real modd.io SDK.
+The actual modd.io CLI/browser runtime was not run in this environment, so its official deterministic test, real Planck adapter behaviour, and sound playback policy still need confirmation with the installed SDK. Local TypeScript checking is not a substitute for `npx moddio test` or a multi-player browser test.
