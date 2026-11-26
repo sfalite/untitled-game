@@ -6,5 +6,11 @@
     "@moddio/sim": "0.6.0",
     "@moddio/server": "0.6.0",
     "@moddio/client": "0.6.0"
+  },
+  "scripts": {
+    "test:sim": "npx moddio test",
+    "test:browser:2": "npx moddio play --players 2 --seconds 30 --shots 3,10,20",
+    "test:browser:3": "npx moddio play --players 3 --seconds 60 --shots 5,15,30",
+    "test:stability": "npx moddio test && npx moddio play --players 2 --seconds 30 --shots 3,10,20"
   }
 }

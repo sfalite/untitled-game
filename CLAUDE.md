@@ -6,7 +6,7 @@ This repository is a 2D top-down city game using the modd.io SDK. Read `llms.txt
 
 - `sim.ts`: deterministic shared simulation, Planck/Box2D bodies, authoritative projectiles, collision/damage, inventory, object health, death and respawn.
 - `server.ts`: optional room hooks; use the modd.io platform for networking and authority.
-- `client/main.ts`: canvas renderer, menu/server picker, camera, FPS/ping HUD, minimap, inventory, controls, weapon audio, and local predicted shooting visuals.
+- `client/main.ts`: canvas renderer, menu/server picker, camera, FPS/ping HUD, minimap, inventory, controls, weapon audio, and F3 multiplayer diagnostics.
 - `assets/`: all images and audio are bundled locally; do not fetch from third-party hosts.
 
 ## Current gameplay constraints
@@ -21,10 +21,19 @@ This repository is a 2D top-down city game using the modd.io SDK. Read `llms.txt
 
 - Keep `predict: 'self'`; remote players use SDK interpolation. Whole-world prediction previously showed remote player snapping.
 - The input shape includes `shotToken: u32`, which advances for each locally predicted firing interval. The sim accepts at most one bullet burst per new token, and each bullet stores its token and pellet index.
-- Local sound, muzzle flash and tracer can appear immediately, but only the authoritative sim decides collisions and damage. Match local tracers to server bullets by `(owner, shotToken, pelletIndex)` rather than approximate spatial matching. After association, render the projectile along its own fixed-velocity path; never move it toward the shooter's current muzzle.
+- Local sound and muzzle flash can appear immediately, but this build deliberately renders visible bullets only from the authoritative sim state to avoid duplicate provisional/authoritative tracers. Do not re-add a second local bullet collection unless it has a tested, identity-based reconciliation path and never moves an in-flight bullet to the shooter's current muzzle.
 - Client and sim must share muzzle offsets, projectile speed, cooldown, lifetime and shotgun fan. Single projectiles follow aim exactly; shotgun uses the same deterministic symmetric pellet fan in both places.
 - Do not set `inputLead: false` as a generic latency fix. That mode is documented for games which draw the player only from room state and do not predict locally. Client-side feedback can reduce perceived firing delay, but cannot reduce physical ping or server-authoritative hit-confirmation time.
 
 ## Determinism and test requirements
 
 `sim.ts` must not use `Math.random`, wall-clock time, timers, fetch, DOM or browser APIs. Use `ctx.rng()` / `ctx.int()` and `ctx.frame` for deterministic behavior. Iterate players in sorted order and keep state as plain serializable data. Preserve the Planck metre scale of 32 pixels per metre and `canonicalEvery = 100` unless official SDK tests justify a change. Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3,5`, then test two live browser clients. Do not publish before official checks pass; accurately distinguish local static checks from SDK/runtime tests.
+
+
+## Multiplayer diagnostics (Update v21)
+
+- Press F3 to toggle the in-game diagnostics overlay. It samples `game.inspect()` at 2 Hz and displays FPS/ping samples, confirmed/predicted frames, input lead/margin, hash/desync counters, local prediction drift, entity counts, and shot token/fired/resolved/queue state.
+- Keep the overlay read-only. Do not mutate game state or create a second client-side simulation from the HUD.
+- Prediction, input lead, rollback/reconciliation, and remote interpolation belong to `@moddio/client/browser`; preserve `predict: 'self'` unless live SDK evidence justifies a tested change.
+- Before changing multiplayer code, run `npx moddio test`, then `npx moddio play --players 2 --seconds 30 --shots 3,10,20` and `npx moddio play --players 3 --seconds 60 --shots 5,15,30`. If CLI is unavailable, state that limitation honestly and use the F3 panel during live modd.io tests.
+- Use the debug panel to diagnose actual divergence; never claim that TypeScript compilation alone proves live multiplayer stability.

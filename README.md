@@ -1,26 +1,44 @@
-# Chaos City.io — Update v20 (multiplayer consistency audit)
+# Chaos City.io — Update v21: Multiplayer diagnostics
 
-This version focuses on a single authoritative projectile-rendering path and common multiplayer failure cases. It retains the existing modd.io game slug and SDK project layout.
+This update adds an in-game diagnostic overlay and repeatable test entry points without replacing the modd.io SDK's networking/prediction stack or changing gameplay simulation rules.
 
-## Important multiplayer changes
+## In-game diagnostics
 
-- Removed local provisional projectile rendering entirely. Local audio and muzzle flash still react immediately, and the input still gets a unique `shotToken`, but every visible bullet comes from the authoritative simulation state. This avoids drawing a guessed local tracer alongside the real server projectile or starting it from a mismatched predicted muzzle. The tradeoff is that the visible bullet itself arrives after the authoritative room state.
-- The renderer deduplicates each authoritative projectile using `shotKey + pelletIndex` (falling back to the stable bullet id). Shotgun pellets remain separate projectiles by design.
-- Kept `predict: 'self'`, not `world`, so local movement can be predicted without whole-world Planck rollback snapping remote players.
-- Captured shot aim, weapon, slot, token and input-receive position when a discrete shot arrives; delayed shots do not unexpectedly start from the shooter's later location.
-- Added robust angle unwrapping around the 0/2π boundary to stop remote players spinning when aim crosses the rightward axis.
-- The deterministic sim resolves one earliest time-of-impact among walls, trees, moving/static props and players. Bullets stop on the first hit; damage is applied only by the sim.
-- Maintains per-weapon cooldowns, token deduplication, bounded pending shot queues, hit/kill/respawn handling, pickup/drop transactions and spawn protection.
+Press **F3** during a match to toggle **MULTIPLAYER DIAGNOSTICS**. The overlay samples `game.inspect()` at 2 Hz and shows:
 
-## Tests available in this workspace
+- FPS plus current, 10-second average, and peak sampled ping.
+- Confirmed/predicted frame numbers and their gap.
+- SDK input lead and safety margin when supplied by the SDK.
+- Desync agreed/disagreed counters and the last confirmed state hash when available.
+- Predicted-vs-confirmed local player position drift.
+- Player, bullet, pickup, prop and particle counts.
+- Local shot token versus the sim's last fired/resolved token and pending-shot queue length.
+- Local position, aim, HP and inventory summary.
 
-Run the official SDK checks after installing dependencies with Node.js 22 or newer:
+The panel is observational only: it does not write to the simulation, change prediction settings, move projectiles, or apply damage. FPS and ping in the regular HUD remain visible.
+
+## Networking architecture retained
+
+- `predict: 'self'` remains enabled: the local player is predicted while remote players are interpolated by the SDK.
+- The SDK continues to own input scheduling, rollback/reconciliation, snapshots and room authority. This project does not implement a second prediction or interpolation loop.
+- `sim.ts` remains deterministic and owns authoritative movement/physics, projectile creation and collision, damage, inventory, pickups/drops, death and respawn.
+- Projectile visuals use the authoritative state only in this build. Local audio and muzzle flash are responsive visual feedback; they do not create a second projectile.
+- The overlay is diagnostic, not proof that all multiplayer issues are fixed. Read its counters while reproducing a live issue in modd.io.
+
+## Repeatable test commands
+
+Use Node.js 22 or later from this directory after dependencies/network access are available:
 
 ```sh
 npx moddio test
-npx moddio dev
+npx moddio play --players 2 --seconds 30 --shots 3,10,20
+npx moddio play --players 3 --seconds 60 --shots 5,15,30
 ```
 
-A local isolated simulation harness in the work environment passed 15 cases: quick-click deduplication, coalesced tokens, same-frame and delayed muzzle origin, nearest collision ordering, wall/tree blocking, moving-prop sweep, reconnect baseline, spawn-protection tick, pickup/drop atomicity, kill/respawn/score, deterministic replay and angle seam interpolation. Separate static checks confirmed one authoritative visual bullet source and a per-frame dedupe guard. TypeScript syntax checks passed with temporary SDK ambient declarations.
+Equivalent npm scripts are available: `npm run test:sim`, `npm run test:browser:2`, `npm run test:browser:3`, and `npm run test:stability`. The CLI must be installed/downloadable for these commands to run.
 
-The isolated harness uses a mocked Planck adapter and is not a replacement for `npx moddio test` or a real two-/three-player browser test. The official CLI could not be run in this environment because the npm registry request failed with a DNS `EAI_AGAIN` error.
+For live modd.io testing, join the same room from two browser sessions, press F3 in each, and reproduce: one click per semiautomatic shot, held automatic fire, fire while moving/turning, bullets against walls/trees/props, damage, weapon pickup/drop, and respawn. Compare confirmed/predicted frame gap, desync counters, ping, drift and shot token/fired/resolved values. If the issue appears only live, record those readings and the weapon/action that triggered it.
+
+## Asset and compatibility notes
+
+The current game slug is preserved in `moddio.json`. Assets are local and loaded through relative paths. Preserve the existing `llms.txt`, `.gitignore`, and `tsconfig.json` in the working repository when applying the ZIP.
