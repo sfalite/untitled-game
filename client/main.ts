@@ -35,7 +35,6 @@ const CLIENT_WEAPON_RULES = [
   { speed: 15, life: 28, spread: 0.25, pellets: 5, cooldown: 12, color: '#fff0b0' },
 ] as const;
 type LocalPredictedBullet = {
-  id: number;
   shotToken: number;
   weaponId: number;
   pelletIndex: number;
@@ -49,10 +48,8 @@ type LocalPredictedBullet = {
   maxAgeMs: number;
   lastX: number;
   lastY: number;
-  authoritativeId?: number;
 };
 let localPredictedBullets: LocalPredictedBullet[] = [];
-let nextLocalPredictedBulletId = 1;
 let localShotToken = 0;
 let localNextShotAt = 0;
 let localFireWasDown = false;
@@ -622,7 +619,6 @@ function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: n
 }
 function resetLocalShotPrediction(): void {
   localPredictedBullets = [];
-  nextLocalPredictedBulletId = 1;
   localShotToken = 0;
   localNextShotAt = 0;
   localFireWasDown = false;
@@ -671,7 +667,7 @@ function addPredictedShot(player: any, shotToken: number, now: number): void {
       : 0;
     const angle = aimAngle + spreadOffset;
     localPredictedBullets.push({
-      id: nextLocalPredictedBulletId++, shotToken, weaponId, pelletIndex,
+      shotToken, weaponId, pelletIndex,
       startX: muzzle.x, startY: muzzle.y,
       vx: Math.cos(angle) * rule.speed,
       vy: Math.sin(angle) * rule.speed,
@@ -804,53 +800,21 @@ function drawSynchronizedBullets(
   ctx: CanvasRenderingContext2D,
   bulletsInput: any[],
   playerId: string,
-  confirmedShotToken: number,
   now: number,
   scene: any,
 ): void {
   const bullets = Array.isArray(bulletsInput) ? bulletsInput : [];
-  const authoritativeById = new Map<number, any>();
-  for (const b of bullets) if (Number.isFinite(Number(b.id))) authoritativeById.set(Number(b.id), b);
 
-  // Drop provisional tracers as soon as their authoritative projectile disappears. In
-  // particular, if a server bullet hit a wall and was removed before appearing in a snapshot,
-  // its local provisional tracer must not continue flying through the wall.
-  localPredictedBullets = localPredictedBullets.filter((b) =>
-    b.authoritativeId == null || authoritativeById.has(b.authoritativeId));
-
-  // Match by exact input token + pellet index. No spatial/angle guessing is used.
-  const localAuthoritative = bullets
-    .filter((b) => b.owner === playerId && !localPredictedBullets.some((p) => p.authoritativeId === Number(b.id)))
-    .slice()
-    .sort((a, b) => (Number(a.bornFrame) - Number(b.bornFrame)) || (Number(a.id) - Number(b.id)));
-  for (const auth of localAuthoritative) {
-    if (!Number.isFinite(Number(auth.shotToken)) || !Number.isFinite(Number(auth.pelletIndex))) continue;
-    const predicted = localPredictedBullets.find((candidate) =>
-      candidate.authoritativeId == null
-      && candidate.shotToken === Number(auth.shotToken)
-      && candidate.pelletIndex === Number(auth.pelletIndex));
-    if (predicted) predicted.authoritativeId = Number(auth.id);
-  }
-
+  // One renderer per shot, never two. The local player sees the immediate client-predicted
+  // tracer only. Rendering their interpolated authoritative copy as well can double it because
+  // numeric identity fields may be blended between snapshots and fail shotToken matching.
+  // Damage, hit detection and projectile removal remain authoritative in sim.ts.
   const remaining: LocalPredictedBullet[] = [];
   for (const predicted of localPredictedBullets) {
-    if (predicted.authoritativeId != null) {
-      // Confirmed projectiles are rendered from the authoritative state below, without
-      // extrapolating them ahead of their collision-checked simulation position.
-      remaining.push(predicted);
-      continue;
-    }
     const ageMs = now - predicted.bornAt;
     if (ageMs >= predicted.maxAgeMs) continue;
-    // Once the authority confirms this token, discard any provisional tracer that did not match
-    // an authoritative bullet. A grace window here draws the same shot twice on slower connections.
-    if (confirmedShotToken >= predicted.shotToken) continue;
-    if (ageMs > 900 && confirmedShotToken < predicted.shotToken) continue;
 
     const point = predictedBulletAtTime(predicted, now);
-    // Test the entire segment since the last rendered frame, not just its endpoint. This
-    // clips client-only instant tracers against walls, tree trunks, props and players so the
-    // prediction layer cannot visually undo the authoritative collision system.
     if (clientBulletSegmentBlocked(predicted.lastX, predicted.lastY, point.x, point.y, scene, playerId)) {
       continue;
     }
@@ -864,10 +828,11 @@ function drawSynchronizedBullets(
   }
   localPredictedBullets = remaining;
 
-  // Draw confirmed projectiles only at the authority/interpolation position. Never extrapolate
-  // their position beyond a collision check: doing so can make a bullet appear past a wall while
-  // the room still displays the previous frame. Clip the last segment as a defensive visual guard.
+  // All remote players are drawn from the room's interpolated authoritative projectile state.
+  // Local-owner bullets are intentionally skipped here because their predicted counterparts are
+  // already drawn above. This avoids duplicate visuals without changing server-side damage.
   for (const b of bullets) {
+    if (String(b.owner || '') === playerId) continue;
     const x = Number(b.x), y = Number(b.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     const age = Math.max(0, Number(b.age) || 0);
@@ -914,13 +879,10 @@ function drawGame(state: any, self: any, playerId: string): void {
   drawWallsLayer(ctx, visible);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
-  // Local shots are predicted immediately for responsive visuals, then associated with the
-  // authoritative projectile id and reconciled to its fixed-velocity path. Damage/collisions
-  // remain exclusively in sim.ts; remote projectiles stay on the interpolated room timeline.
-  drawSynchronizedBullets(
-    ctx, s.bullets || [], playerId,
-    Math.max(0, Math.floor(Number(confirmedMine.lastFiredClientShotToken) || 0)), renderNow, s,
-  );
+  // Local shots use only the immediate predicted tracer for their visual representation.
+  // The interpolated authoritative copy of the same local projectile is intentionally hidden
+  // by drawSynchronizedBullets; remote projectiles remain room-authoritative.
+  drawSynchronizedBullets(ctx, s.bullets || [], playerId, renderNow, s);
   for (const p of s.particles || []) {
     const alpha = Math.max(0.08, Math.min(1, p.life / 25));
     ctx.save(); ctx.globalAlpha = alpha; ctx.translate(p.x, p.y); ctx.rotate(p.rotation || 0);
