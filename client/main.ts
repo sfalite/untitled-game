@@ -47,6 +47,8 @@ type LocalPredictedBullet = {
   color: string;
   bornAt: number;
   maxAgeMs: number;
+  lastX: number;
+  lastY: number;
   authoritativeId?: number;
 };
 let localPredictedBullets: LocalPredictedBullet[] = [];
@@ -645,18 +647,6 @@ function predictedBulletAtTime(bullet: LocalPredictedBullet, now: number): { x: 
     ageTicks,
   };
 }
-function authoritativeBulletAtLocalTime(bullet: any, predicted: LocalPredictedBullet, now: number): { x: number; y: number } {
-  // The SDK interpolates confirmed state behind the locally predicted player. Use the bullet's
-  // own simulation age to extrapolate its fixed-velocity segment to the local render time. This
-  // is a straight-line extrapolation, never a correction toward the shooter's current muzzle.
-  const localAgeTicks = Math.max(0, (now - predicted.bornAt) / CLIENT_TICK_MS);
-  const authoritativeAge = Number.isFinite(Number(bullet.age)) ? Number(bullet.age) : 0;
-  const deltaTicks = clampNumber(localAgeTicks - authoritativeAge, -8, 15);
-  return {
-    x: Number(bullet.x) + Number(bullet.vx) * deltaTicks,
-    y: Number(bullet.y) + Number(bullet.vy) * deltaTicks,
-  };
-}
 function addPredictedShot(player: any, shotToken: number, now: number): void {
   const weaponId = Number.isFinite(Number(player.shotWeapon)) ? Number(player.shotWeapon) : -1;
   const rule = CLIENT_WEAPON_RULES[weaponId];
@@ -678,6 +668,8 @@ function addPredictedShot(player: any, shotToken: number, now: number): void {
       angle, color: rule.color,
       bornAt: now,
       maxAgeMs: rule.life * CLIENT_TICK_MS + 120,
+      lastX: muzzle.x,
+      lastY: muzzle.y,
     });
   }
 }
@@ -712,24 +704,111 @@ function drawBulletGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, co
   ctx.fillStyle = 'rgba(255,240,170,.32)'; ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
+// Client-side copies of the authoritative swept-collision tests. These are used only to
+// clip provisional tracers and to avoid drawing an interpolated projectile beyond a blocker.
+// Damage and projectile removal remain exclusively in sim.ts.
+const CLIENT_BULLET_RADIUS = 3;
+const CLIENT_TREE_TRUNK_RADIUS = 7.5;
+function clientSegmentHitsAabb(x0: number, y0: number, x1: number, y1: number,
+                               minX: number, minY: number, maxX: number, maxY: number): boolean {
+  let tMin = 0, tMax = 1;
+  const dx = x1 - x0, dy = y1 - y0;
+  if (Math.abs(dx) < 0.000001) {
+    if (x0 < minX || x0 > maxX) return false;
+  } else {
+    let a = (minX - x0) / dx, b = (maxX - x0) / dx;
+    if (a > b) { const swap = a; a = b; b = swap; }
+    tMin = Math.max(tMin, a); tMax = Math.min(tMax, b);
+    if (tMin > tMax) return false;
+  }
+  if (Math.abs(dy) < 0.000001) {
+    if (y0 < minY || y0 > maxY) return false;
+  } else {
+    let a = (minY - y0) / dy, b = (maxY - y0) / dy;
+    if (a > b) { const swap = a; a = b; b = swap; }
+    tMin = Math.max(tMin, a); tMax = Math.min(tMax, b);
+    if (tMin > tMax) return false;
+  }
+  return tMax >= 0 && tMin <= 1;
+}
+function clientSegmentHitsCircle(x0: number, y0: number, x1: number, y1: number,
+                                 cx: number, cy: number, radius: number): boolean {
+  const dx = x1 - x0, dy = y1 - y0;
+  const lengthSquared = dx * dx + dy * dy;
+  let t = lengthSquared > 0.000001 ? ((cx - x0) * dx + (cy - y0) * dy) / lengthSquared : 0;
+  t = Math.max(0, Math.min(1, t));
+  const ox = x0 + dx * t - cx, oy = y0 + dy * t - cy;
+  return ox * ox + oy * oy <= radius * radius;
+}
+function clientSegmentHitsOrientedBox(x0: number, y0: number, x1: number, y1: number,
+                                      cx: number, cy: number, angle: number, hx: number, hy: number): boolean {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const dx0 = x0 - cx, dy0 = y0 - cy, dx1 = x1 - cx, dy1 = y1 - cy;
+  const lx0 = dx0 * c + dy0 * s, ly0 = -dx0 * s + dy0 * c;
+  const lx1 = dx1 * c + dy1 * s, ly1 = -dx1 * s + dy1 * c;
+  return clientSegmentHitsAabb(lx0, ly0, lx1, ly1,
+    -hx - CLIENT_BULLET_RADIUS, -hy - CLIENT_BULLET_RADIUS,
+    hx + CLIENT_BULLET_RADIUS, hy + CLIENT_BULLET_RADIUS);
+}
+function clientPropHalfExtents(kind: string): { hx: number; hy: number } | null {
+  if (kind === 'car') return { hx: 46, hy: 22 };
+  if (kind === 'bench') return { hx: 17, hy: 13 };
+  if (kind === 'crate') return { hx: 25, hy: 25 };
+  if (kind === 'hydrant') return { hx: 13, hy: 14.5 };
+  if (kind === 'cone') return { hx: 15, hy: 16 };
+  if (kind === 'bin') return { hx: 13, hy: 14.5 };
+  return null;
+}
+function clientBulletSegmentBlocked(x0: number, y0: number, x1: number, y1: number,
+                                   scene: any, ownerId: string): boolean {
+  // Static building colliders use precisely the same rectangles and expansion as sim.ts.
+  for (const building of BUILDINGS) {
+    if (clientSegmentHitsAabb(x0, y0, x1, y1,
+      building.x - CLIENT_BULLET_RADIUS, building.y - CLIENT_BULLET_RADIUS,
+      building.x + building.w + CLIENT_BULLET_RADIUS,
+      building.y + building.h + CLIENT_BULLET_RADIUS)) return true;
+  }
+  for (const tree of TREES) {
+    if (clientSegmentHitsCircle(x0, y0, x1, y1, tree.x, tree.y,
+      CLIENT_TREE_TRUNK_RADIUS + CLIENT_BULLET_RADIUS)) return true;
+  }
+  for (const prop of (Array.isArray(scene?.props) ? scene.props : [])) {
+    if (!prop?.active) continue;
+    const extent = clientPropHalfExtents(String(prop.kind));
+    if (!extent) continue;
+    if (clientSegmentHitsOrientedBox(x0, y0, x1, y1,
+      Number(prop.x), Number(prop.y), Number(prop.angle) || 0, extent.hx, extent.hy)) return true;
+  }
+  for (const [id, target] of Object.entries(scene?.players || {}) as [string, any][]) {
+    if (id === ownerId || !target) continue;
+    const px0 = Number.isFinite(Number(target.prevX)) ? Number(target.prevX) : Number(target.x);
+    const py0 = Number.isFinite(Number(target.prevY)) ? Number(target.prevY) : Number(target.y);
+    const px1 = Number(target.x), py1 = Number(target.y);
+    if (clientSegmentHitsOrientedBox(x0 - px0, y0 - py0,
+      x1 - px1, y1 - py1, 0, 0,
+      (Number(target.aimAngle) || 0) + Math.PI / 2, 21.5, 17.5)) return true;
+  }
+  return false;
+}
 function drawSynchronizedBullets(
   ctx: CanvasRenderingContext2D,
   bulletsInput: any[],
   playerId: string,
   confirmedShotToken: number,
   now: number,
+  scene: any,
 ): void {
   const bullets = Array.isArray(bulletsInput) ? bulletsInput : [];
   const authoritativeById = new Map<number, any>();
   for (const b of bullets) if (Number.isFinite(Number(b.id))) authoritativeById.set(Number(b.id), b);
 
-  // Once a predicted shot has an authoritative bullet id, keep only that exact source alive.
-  // When the authoritative projectile is removed by a collision, its visual disappears too.
+  // Drop provisional tracers as soon as their authoritative projectile disappears. In
+  // particular, if a server bullet hit a wall and was removed before appearing in a snapshot,
+  // its local provisional tracer must not continue flying through the wall.
   localPredictedBullets = localPredictedBullets.filter((b) =>
     b.authoritativeId == null || authoritativeById.has(b.authoritativeId));
 
-  // Match by the input shot token and pellet index, never by nearest screen position or angle.
-  // This remains correct if local prediction and confirmed shotSeq temporarily diverge.
+  // Match by exact input token + pellet index. No spatial/angle guessing is used.
   const localAuthoritative = bullets
     .filter((b) => b.owner === playerId && !localPredictedBullets.some((p) => p.authoritativeId === Number(b.id)))
     .slice()
@@ -743,49 +822,49 @@ function drawSynchronizedBullets(
     if (predicted) predicted.authoritativeId = Number(auth.id);
   }
 
-  const attachedIds = new Set<number>();
-  for (const b of bullets) {
-    if (b.owner === playerId) {
-      const matched = localPredictedBullets.find((p) => p.authoritativeId === Number(b.id));
-      if (matched) {
-        attachedIds.add(Number(b.id));
-        // The room's fixed-velocity trajectory wins as soon as it arrives. We extrapolate its
-        // own age to the local render time, then draw it directly on that line. No moving-muzzle
-        // attachment or blended positional nudge is allowed after confirmation.
-        const authPos = authoritativeBulletAtLocalTime(b, matched, now);
-        drawBulletGlyph(ctx, authPos.x, authPos.y, b.color || matched.color);
-      } else {
-        // If prediction was rolled back or the metadata is absent, still draw the authoritative
-        // bullet where the simulation says it is rather than inventing a visual trajectory.
-        drawBulletGlyph(ctx, Number(b.x), Number(b.y), b.color || '#ffd16a');
-      }
-    } else {
-      // Remote bullets remain on the same interpolated authoritative timeline as remote players.
-      drawBulletGlyph(ctx, Number(b.x), Number(b.y), b.color || '#ffd16a');
-    }
-  }
-
   const remaining: LocalPredictedBullet[] = [];
   for (const predicted of localPredictedBullets) {
     if (predicted.authoritativeId != null) {
-      if (attachedIds.has(predicted.authoritativeId)) remaining.push(predicted);
+      // Confirmed projectiles are rendered from the authoritative state below, without
+      // extrapolating them ahead of their collision-checked simulation position.
+      remaining.push(predicted);
       continue;
     }
     const ageMs = now - predicted.bornAt;
     if (ageMs >= predicted.maxAgeMs) continue;
-    // If the local prediction has not been confirmed within an RTT/lead-sized window, stop
-    // showing the provisional tracer. The shot may have been rejected by a cooldown, full bullet
-    // budget, a simultaneous drop, or a rollback; never keep a speculative bullet flying forever.
     if (confirmedShotToken >= predicted.shotToken && ageMs > 180) continue;
     if (ageMs > 900 && confirmedShotToken < predicted.shotToken) continue;
+
+    const point = predictedBulletAtTime(predicted, now);
+    // Test the entire segment since the last rendered frame, not just its endpoint. This
+    // clips client-only instant tracers against walls, tree trunks, props and players so the
+    // prediction layer cannot visually undo the authoritative collision system.
+    if (clientBulletSegmentBlocked(predicted.lastX, predicted.lastY, point.x, point.y, scene, playerId)) {
+      continue;
+    }
+    predicted.lastX = point.x;
+    predicted.lastY = point.y;
     const fade = ageMs > predicted.maxAgeMs - 100
       ? clampNumber((predicted.maxAgeMs - ageMs) / 100, 0, 1)
       : 1;
-    const point = predictedBulletAtTime(predicted, now);
     drawBulletGlyph(ctx, point.x, point.y, predicted.color, fade);
     remaining.push(predicted);
   }
   localPredictedBullets = remaining;
+
+  // Draw confirmed projectiles only at the authority/interpolation position. Never extrapolate
+  // their position beyond a collision check: doing so can make a bullet appear past a wall while
+  // the room still displays the previous frame. Clip the last segment as a defensive visual guard.
+  for (const b of bullets) {
+    const x = Number(b.x), y = Number(b.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const age = Math.max(0, Number(b.age) || 0);
+    const segmentTicks = Math.min(1, age);
+    const x0 = x - (Number(b.vx) || 0) * segmentTicks;
+    const y0 = y - (Number(b.vy) || 0) * segmentTicks;
+    if (clientBulletSegmentBlocked(x0, y0, x, y, scene, String(b.owner || ''))) continue;
+    drawBulletGlyph(ctx, x, y, b.color || '#ffd16a');
+  }
 }
 
 function drawGame(state: any, self: any, playerId: string): void {
@@ -828,7 +907,7 @@ function drawGame(state: any, self: any, playerId: string): void {
   // remain exclusively in sim.ts; remote projectiles stay on the interpolated room timeline.
   drawSynchronizedBullets(
     ctx, s.bullets || [], playerId,
-    Math.max(0, Math.floor(Number(confirmedMine.lastFiredClientShotToken) || 0)), renderNow,
+    Math.max(0, Math.floor(Number(confirmedMine.lastFiredClientShotToken) || 0)), renderNow, s,
   );
   for (const p of s.particles || []) {
     const alpha = Math.max(0.08, Math.min(1, p.life / 25));
