@@ -4,8 +4,8 @@ import { planck, pl } from '@moddio/sim/planck';
 // Chaos City.io — deterministic Box2D-style physics through modd.io's Planck adapter.
 // Game coordinates are pixels; physics coordinates are metres (32 px = 1 m).
 const TILE = 64;
-const COLS = 28;
-const ROWS = 24;
+const COLS = 42;
+const ROWS = 42;
 const W = COLS * TILE;
 const H = ROWS * TILE;
 const PPM = 32;
@@ -37,28 +37,111 @@ box2dPhysics.canonicalEvery = 100;
 
 type Rect = { x: number; y: number; w: number; h: number; color: string; style: number };
 const BUILDINGS: Rect[] = [
-  {x:32,y:38,w:220,h:224,color:'#c78b4a',style:0}, {x:478,y:45,w:160,h:214,color:'#d47b37',style:1},
-  {x:858,y:38,w:170,h:224,color:'#8b9fa0',style:2}, {x:1240,y:42,w:170,h:218,color:'#dc7935',style:3},
-  {x:1610,y:48,w:120,h:208,color:'#c78b4a',style:0},
-  {x:36,y:464,w:220,h:160,color:'#d47b37',style:1}, {x:478,y:464,w:160,h:160,color:'#c78b4a',style:0},
-  {x:858,y:462,w:170,h:160,color:'#d47b37',style:3}, {x:1242,y:465,w:170,h:160,color:'#5eaa75',style:2},
-  {x:1612,y:468,w:120,h:160,color:'#8b9fa0',style:1},
-  {x:34,y:850,w:220,h:160,color:'#8b9fa0',style:2}, {x:478,y:850,w:160,h:160,color:'#c78b4a',style:0},
-  {x:858,y:850,w:170,h:160,color:'#5eaa75',style:2}, {x:1241,y:850,w:170,h:160,color:'#d47b37',style:1},
-  {x:1610,y:852,w:120,h:160,color:'#c78b4a',style:3},
-  {x:35,y:1240,w:220,h:180,color:'#d47b37',style:1}, {x:478,y:1240,w:160,h:180,color:'#5eaa75',style:2},
-  {x:858,y:1240,w:170,h:180,color:'#c78b4a',style:0}, {x:1240,y:1240,w:170,h:180,color:'#8b9fa0',style:2},
-  {x:1610,y:1240,w:120,h:180,color:'#d47b37',style:3},
+  {x:32,y:38,w:220,h:224,color:'#c78b4a',style:0},
+  {x:478,y:38,w:160,h:224,color:'#d47b37',style:1},
+  {x:858,y:38,w:170,h:224,color:'#8b9fa0',style:2},
+  {x:1240,y:38,w:170,h:224,color:'#dc7935',style:3},
+  {x:1610,y:38,w:120,h:224,color:'#5eaa75',style:2},
+  {x:1984,y:38,w:220,h:224,color:'#c78b4a',style:1},
+  {x:2368,y:38,w:160,h:224,color:'#8b9fa0',style:0},
+  {x:32,y:464,w:220,h:160,color:'#d47b37',style:1},
+  {x:478,y:464,w:160,h:160,color:'#8b9fa0',style:2},
+  {x:858,y:464,w:170,h:160,color:'#dc7935',style:3},
+  {x:1240,y:464,w:170,h:160,color:'#5eaa75',style:2},
+  {x:1610,y:464,w:120,h:160,color:'#c78b4a',style:1},
+  {x:1984,y:464,w:220,h:160,color:'#8b9fa0',style:0},
+  {x:2368,y:464,w:160,h:160,color:'#c78b4a',style:0},
+  {x:32,y:850,w:220,h:160,color:'#8b9fa0',style:2},
+  {x:478,y:850,w:160,h:160,color:'#dc7935',style:3},
+  {x:858,y:850,w:170,h:160,color:'#5eaa75',style:2},
+  {x:1240,y:850,w:170,h:160,color:'#c78b4a',style:1},
+  {x:1610,y:850,w:120,h:160,color:'#8b9fa0',style:0},
+  {x:1984,y:850,w:220,h:160,color:'#c78b4a',style:0},
+  {x:2368,y:850,w:160,h:160,color:'#d47b37',style:1},
+  {x:32,y:1240,w:220,h:180,color:'#dc7935',style:3},
+  {x:478,y:1240,w:160,h:180,color:'#5eaa75',style:2},
+  {x:858,y:1240,w:170,h:180,color:'#c78b4a',style:1},
+  {x:1240,y:1240,w:170,h:180,color:'#8b9fa0',style:0},
+  {x:1610,y:1240,w:120,h:180,color:'#c78b4a',style:0},
+  {x:1984,y:1240,w:220,h:180,color:'#d47b37',style:1},
+  {x:2368,y:1240,w:160,h:180,color:'#8b9fa0',style:2},
+  {x:32,y:1610,w:220,h:180,color:'#5eaa75',style:2},
+  {x:478,y:1610,w:160,h:180,color:'#c78b4a',style:1},
+  {x:858,y:1610,w:170,h:180,color:'#8b9fa0',style:0},
+  {x:1240,y:1610,w:170,h:180,color:'#c78b4a',style:0},
+  {x:1610,y:1610,w:120,h:180,color:'#d47b37',style:1},
+  {x:1984,y:1610,w:220,h:180,color:'#8b9fa0',style:2},
+  {x:2368,y:1610,w:160,h:180,color:'#dc7935',style:3},
+  {x:32,y:1990,w:220,h:180,color:'#c78b4a',style:1},
+  {x:478,y:1990,w:160,h:180,color:'#8b9fa0',style:0},
+  {x:858,y:1990,w:170,h:180,color:'#c78b4a',style:0},
+  {x:1240,y:1990,w:170,h:180,color:'#d47b37',style:1},
+  {x:1610,y:1990,w:120,h:180,color:'#8b9fa0',style:2},
+  {x:1984,y:1990,w:220,h:180,color:'#dc7935',style:3},
+  {x:2368,y:1990,w:160,h:180,color:'#5eaa75',style:2},
+  {x:32,y:2368,w:220,h:180,color:'#8b9fa0',style:0},
+  {x:478,y:2368,w:160,h:180,color:'#c78b4a',style:0},
+  {x:858,y:2368,w:170,h:180,color:'#d47b37',style:1},
+  {x:1240,y:2368,w:170,h:180,color:'#8b9fa0',style:2},
+  {x:1610,y:2368,w:120,h:180,color:'#dc7935',style:3},
+  {x:1984,y:2368,w:220,h:180,color:'#5eaa75',style:2},
+  {x:2368,y:2368,w:160,h:180,color:'#c78b4a',style:1},
 ];
-type Tree = { x: number; y: number; r: number }; // r is the trunk radius in world pixels (10px, 20px diameter).
+type Tree = { x: number; y: number; r: number }; // 15x15px circular trunk collider; canopy remains 128x128.
 const TREES: Tree[] = [
-  {x:320,y:292,r:10},{x:704,y:292,r:10},{x:1092,y:292,r:10},{x:1476,y:292,r:10},
-  {x:320,y:664,r:10},{x:704,y:664,r:10},{x:1092,y:664,r:10},{x:1476,y:664,r:10},
-  {x:320,y:1048,r:10},{x:704,y:1048,r:10},{x:1092,y:1048,r:10},{x:1476,y:1048,r:10},
+  {x:320,y:292,r:7.5},
+  {x:704,y:292,r:7.5},
+  {x:1092,y:292,r:7.5},
+  {x:1476,y:292,r:7.5},
+  {x:1856,y:292,r:7.5},
+  {x:2240,y:292,r:7.5},
+  {x:2624,y:292,r:7.5},
+  {x:320,y:664,r:7.5},
+  {x:704,y:664,r:7.5},
+  {x:1092,y:664,r:7.5},
+  {x:1476,y:664,r:7.5},
+  {x:1856,y:664,r:7.5},
+  {x:2240,y:664,r:7.5},
+  {x:2624,y:664,r:7.5},
+  {x:320,y:1048,r:7.5},
+  {x:704,y:1048,r:7.5},
+  {x:1092,y:1048,r:7.5},
+  {x:1476,y:1048,r:7.5},
+  {x:1856,y:1048,r:7.5},
+  {x:2240,y:1048,r:7.5},
+  {x:2624,y:1048,r:7.5},
+  {x:320,y:1430,r:7.5},
+  {x:704,y:1430,r:7.5},
+  {x:1092,y:1430,r:7.5},
+  {x:1476,y:1430,r:7.5},
+  {x:1856,y:1430,r:7.5},
+  {x:2240,y:1430,r:7.5},
+  {x:2624,y:1430,r:7.5},
+  {x:320,y:1800,r:7.5},
+  {x:704,y:1800,r:7.5},
+  {x:1092,y:1800,r:7.5},
+  {x:1476,y:1800,r:7.5},
+  {x:1856,y:1800,r:7.5},
+  {x:2240,y:1800,r:7.5},
+  {x:2624,y:1800,r:7.5},
+  {x:320,y:2180,r:7.5},
+  {x:704,y:2180,r:7.5},
+  {x:1092,y:2180,r:7.5},
+  {x:1476,y:2180,r:7.5},
+  {x:1856,y:2180,r:7.5},
+  {x:2240,y:2180,r:7.5},
+  {x:2624,y:2180,r:7.5},
+  {x:320,y:2560,r:7.5},
+  {x:704,y:2560,r:7.5},
+  {x:1092,y:2560,r:7.5},
+  {x:1476,y:2560,r:7.5},
+  {x:1856,y:2560,r:7.5},
+  {x:2240,y:2560,r:7.5},
+  {x:2624,y:2560,r:7.5},
 ];
 
 type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
-type Prop = { id: number; x: number; y: number; kind: PropKind; active: boolean; respawnAt: number; body: number; angle: number };
+type Prop = { id: number; x: number; y: number; kind: PropKind; variant: number; active: boolean; respawnAt: number; body: number; angle: number };
 type Player = {
   name: string; x: number; y: number; prevX: number; prevY: number; body: number; move: [number, number]; aimAngle: number;
   weapon: number; fire: boolean; smash: boolean; fireCooldown: number; smashCooldown: number;
@@ -72,15 +155,59 @@ type State = {
   nextBulletId: number; nextParticleId: number;
 };
 
-const PROP_SEEDS: Array<{x:number;y:number;kind:PropKind}> = [
-  {x:402,y:320,kind:'bin'},{x:390,y:382,kind:'crate'},{x:620,y:360,kind:'hydrant'},
-  {x:660,y:390,kind:'cone'},{x:1000,y:350,kind:'bench'},{x:1040,y:380,kind:'bin'},
-  {x:1366,y:354,kind:'crate'},{x:1420,y:385,kind:'hydrant'},{x:420,y:738,kind:'car'},
-  {x:610,y:740,kind:'bin'},{x:660,y:760,kind:'crate'},{x:970,y:735,kind:'cone'},
-  {x:1384,y:740,kind:'bench'},{x:400,y:1125,kind:'hydrant'},{x:580,y:1125,kind:'car'},
-  {x:1000,y:1125,kind:'bin'},{x:1384,y:1125,kind:'crate'},{x:356,y:1510,kind:'cone'},
-  {x:624,y:1510,kind:'bin'},{x:1000,y:1510,kind:'hydrant'},{x:1384,y:1510,kind:'bench'},
-  {x:870,y:350,kind:'crate'},{x:900,y:750,kind:'bin'},{x:870,y:1120,kind:'cone'},
+const PROP_SEEDS: Array<{x:number;y:number;kind:PropKind;variant?:number}> = [
+  {x:402,y:320,kind:'bin'},
+  {x:390,y:382,kind:'crate'},
+  {x:620,y:360,kind:'hydrant'},
+  {x:660,y:390,kind:'cone'},
+  {x:1000,y:350,kind:'bench'},
+  {x:1040,y:380,kind:'bin'},
+  {x:1366,y:354,kind:'crate'},
+  {x:1420,y:385,kind:'hydrant'},
+  {x:610,y:740,kind:'bin'},
+  {x:660,y:760,kind:'crate'},
+  {x:970,y:735,kind:'cone'},
+  {x:1384,y:740,kind:'bench'},
+  {x:400,y:1125,kind:'hydrant'},
+  {x:1000,y:1125,kind:'bin'},
+  {x:1384,y:1125,kind:'crate'},
+  {x:356,y:1510,kind:'cone'},
+  {x:624,y:1510,kind:'bin'},
+  {x:1000,y:1510,kind:'hydrant'},
+  {x:1384,y:1510,kind:'bench'},
+  {x:870,y:350,kind:'crate'},
+  {x:900,y:750,kind:'bin'},
+  {x:870,y:1120,kind:'cone'},
+  {x:1700,y:390,kind:'car',variant:0},
+  {x:2070,y:390,kind:'car',variant:1},
+  {x:2460,y:390,kind:'car',variant:2},
+  {x:1700,y:774,kind:'car',variant:3},
+  {x:2070,y:774,kind:'car',variant:4},
+  {x:2460,y:774,kind:'car',variant:5},
+  {x:1700,y:1158,kind:'car',variant:1},
+  {x:2070,y:1158,kind:'car',variant:3},
+  {x:2460,y:1158,kind:'car',variant:4},
+  {x:1700,y:1542,kind:'car',variant:5},
+  {x:2070,y:1542,kind:'car',variant:0},
+  {x:2460,y:1542,kind:'car',variant:2},
+  {x:1700,y:1926,kind:'car',variant:4},
+  {x:2070,y:1926,kind:'car',variant:2},
+  {x:2460,y:1926,kind:'car',variant:5},
+  {x:1700,y:2310,kind:'car',variant:1},
+  {x:2070,y:2310,kind:'car',variant:3},
+  {x:2460,y:2310,kind:'car',variant:0},
+  {x:520,y:1900,kind:'bin'},
+  {x:935,y:1900,kind:'crate'},
+  {x:1320,y:1900,kind:'hydrant'},
+  {x:520,y:2280,kind:'cone'},
+  {x:935,y:2280,kind:'bench'},
+  {x:1320,y:2280,kind:'bin'},
+  {x:520,y:2650,kind:'crate'},
+  {x:935,y:2650,kind:'hydrant'},
+  {x:1320,y:2650,kind:'cone'},
+  {x:400,y:1900,kind:'bench'},
+  {x:820,y:2300,kind:'bin'},
+  {x:1190,y:2650,kind:'crate'},
 ];
 
 function circleHitsRect(x: number, y: number, r: number, b: { x: number; y: number; w: number; h: number }): boolean {
@@ -136,7 +263,7 @@ function makeMapPhysics(world: any): void {
   for (const b of BUILDINGS) makeStaticBox(world, b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0.9);
   for (const t of TREES) {
     const body = world.createBody({ type: 'static', position: pl.Vec2(t.x / PPM, t.y / PPM) });
-    // Artwork remains 128x128, but only the visible trunk blocks movement: a 20x20 circle.
+    // Artwork remains 128x128, but only the trunk blocks movement: a 15x15 circle.
     body.createFixture(pl.Circle(t.r / PPM), { density: 0, friction: 0.9, restitution: 0.02 });
   }
   // Invisible Box2D walls keep bodies inside the city bounds.
@@ -156,7 +283,7 @@ function makePlayerBody(world: any, x: number, y: number): number {
 }
 function propPhysics(kind: PropKind): { hx:number;hy:number;density:number;friction:number;bounce:number } {
   // Half-extents match the rendered object's actual width/height in world pixels.
-  if (kind === 'car') return {hx:30,hy:16,density:2.4,friction:0.82,bounce:0.03};         // 60x32
+  if (kind === 'car') return {hx:46,hy:22,density:2.4,friction:0.82,bounce:0.03};         // 92x44; parked vehicles are not player-drivable
   if (kind === 'bench') return {hx:17,hy:13,density:0.8,friction:0.9,bounce:0.02};         // 34x26
   if (kind === 'crate') return {hx:25,hy:25,density:1.25,friction:0.68,bounce:0.12};       // 50x50
   if (kind === 'hydrant') return {hx:13,hy:14.5,density:1.7,friction:0.62,bounce:0.08};   // 26x29
@@ -272,7 +399,7 @@ function muzzlePosition(p: Player): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '10',
+  version: '11',
   tickRate: 20,
   maxPlayers: 32,
   physics: box2dPhysics,
@@ -297,7 +424,7 @@ export default defineSim({
   init(ctx): State {
     const world: any = ctx.physics;
     makeMapPhysics(world);
-    const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, active: true, respawnAt: 0, body: -1, angle: 0 }));
+    const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0 }));
     for (const prop of props) prop.body = makePropBody(world, prop);
     return { players: {}, props, bullets: [], particles: [], nextBulletId: 1, nextParticleId: 1 };
   },
@@ -326,7 +453,7 @@ export default defineSim({
     if (!p) return;
     p.move = [input.move[0] / 127, input.move[1] / 127];
     p.aimAngle = (input.aim / 65535) * Math.PI * 2;
-    p.weapon = Math.max(0, Math.min(3, input.weapon | 0));
+    p.weapon = Math.max(0, Math.min(4, input.weapon | 0));
     p.fire = !!input.buttons.fire;
     p.smash = !!input.buttons.smash;
   },
@@ -406,7 +533,7 @@ export default defineSim({
           if (dx * dx + dy * dy <= SMASH_RANGE * SMASH_RANGE) destroyProp(state, ctx, prop, p);
         }
       }
-      if (p.fire && p.fireCooldown <= 0 && state.bullets.length < 350) {
+      if (p.fire && p.weapon >= 0 && p.weapon < WEAPONS.length && p.fireCooldown <= 0 && state.bullets.length < 350) {
         const weapon = WEAPONS[p.weapon] || WEAPONS[0];
         const muzzle = muzzlePosition(p);
         p.fireCooldown = weapon.cooldown;

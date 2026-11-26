@@ -9,7 +9,7 @@ This package updates the existing modd.io SDK game while preserving its game slu
 - Reset the FPS sampling window when a new room connects so time spent in the main menu does not distort the initial reading.
 
 
-- Tree art remains 128×128, while the tree trunk collider is now a 20×20 circle (10 px radius).
+- Tree art remains 128×128, while the tree trunk collider is now a 15×15 circle (7.5 px radius).
 - Bullets use swept segment collision per simulation tick against buildings, tree trunks, props, and rotated player hitboxes. This prevents fast projectiles from tunnelling through targets between ticks.
 - Player collision uses relative motion (previous pose to current pose), so bullets can hit a moving player even when the player moves during the same simulation frame.
 - Spawn protection suppresses damage during its brief duration but still blocks the projectile. Bullets no longer visually pass through a protected player and hit someone behind them.
@@ -41,3 +41,11 @@ npx moddio dev
 ```
 
 Before publishing, test with two players, especially automatic-weapon fire, hits on moving players, spawn protection, wall/tree blocking, and minimap position. The local checks documented in `TEST-REPORT.md` are not a replacement for the official SDK test or a real-browser multiplayer test.
+
+
+## Update v8 — Menu, larger city and five-slot inventory
+- Redesigned the main menu with a blurred, locally rendered map backdrop and a responsive region/server picker.
+- Expanded the deterministic city to 42×42 64px tiles (2688×2688 world pixels), with matching client/simulation building and road geometry. Roads stay unmarked.
+- Extended tree locations and reduced the circular trunk collider to 15×15 world pixels (7.5px radius) while retaining 128×128 canopy artwork.
+- Added 18 larger parked cars across the expanded map. They have six visual variants and no driving controls; they remain physics props that can be hit/destroyed.
+- Added a fifth inventory slot for empty hands. Selecting slot 5 hides the held weapon and the simulation does not create bullets while it is selected.
