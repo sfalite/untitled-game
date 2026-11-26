@@ -512,14 +512,20 @@ function drawWeaponPickup(ctx: CanvasRenderingContext2D, pickup: any): void {
   ctx.translate(pickup.x, pickup.y);
   ctx.fillStyle = 'rgba(255,220,115,.15)'; ctx.beginPath(); ctx.arc(0, 0, 21, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = 'rgba(255,220,115,.85)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2); ctx.stroke();
-  ctx.rotate(Number(pickup.angle) || 0); ctx.scale(.67, .67); ctx.translate(0, 12);
-  drawWeaponShape(ctx, Number(pickup.weaponId));
+  ctx.rotate(Number(pickup.angle) || 0); ctx.scale(.67, .67);
+  // Center the complete weapon silhouette inside the orange pickup marker. Each weapon
+  // has a different length, and the Glock's grip is asymmetrical, so use per-weapon bounds.
+  const weaponId = Number(pickup.weaponId);
+  const centerX = weaponId === 0 ? -1.8 : 0;
+  const centerY = weaponId === 0 ? 3 : weaponId === 1 ? 10.5 : weaponId === 2 ? 11.5 : weaponId === 3 ? 10 : 10.5;
+  ctx.translate(centerX, centerY);
+  drawWeaponShape(ctx, weaponId);
   ctx.restore();
 }
 function drawWeaponLocal(ctx: CanvasRenderingContext2D, weapon: number, scale = 1): void {
-  // The Glock is shorter than the other weapons. Move its grip/barrel forward relative to
-  // the sprite's built-in right hand so it no longer appears buried in the hand layer.
-  ctx.save(); ctx.translate(8, weapon === 0 ? -1 : 4); ctx.scale(scale, scale);
+  // Move the Glock farther forward along the sprite's local muzzle-up axis. The weapon,
+  // muzzle flash and authoritative projectile origin use the same longer forward offset.
+  ctx.save(); ctx.translate(8, weapon === 0 ? -9 : 4); ctx.scale(scale, scale);
   drawWeaponShape(ctx, weapon);
   ctx.restore();
 }
@@ -532,7 +538,7 @@ function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: n
   if (!(player.muzzleFlash > 0) || player.shotWeapon !== weaponId) return;
   const alpha = Math.min(1, player.muzzleFlash / 2);
   const radius = weaponId === 3 ? 8 : weaponId === 4 ? 7 : 5.5;
-  const barrelLength = weaponId === 0 ? 18 : weaponId === 3 ? 27 : 25;
+  const barrelLength = weaponId === 0 ? 27 : weaponId === 3 ? 27 : 25;
   ctx.save(); ctx.globalAlpha = alpha; ctx.translate(8, -barrelLength);
   ctx.fillStyle = '#fff6b0'; ctx.strokeStyle = '#ffac42'; ctx.lineWidth = 2;
   ctx.beginPath();
