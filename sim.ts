@@ -50,22 +50,22 @@ const BUILDINGS: Rect[] = [
   {x:858,y:1240,w:170,h:180,color:'#c78b4a',style:0}, {x:1240,y:1240,w:170,h:180,color:'#8b9fa0',style:2},
   {x:1610,y:1240,w:120,h:180,color:'#d47b37',style:3},
 ];
-type Tree = { x: number; y: number; r: number }; // r is the trunk radius in world pixels (15px, 30px diameter).
+type Tree = { x: number; y: number; r: number }; // r is the trunk radius in world pixels (10px, 20px diameter).
 const TREES: Tree[] = [
-  {x:320,y:292,r:15},{x:704,y:292,r:15},{x:1092,y:292,r:15},{x:1476,y:292,r:15},
-  {x:320,y:664,r:15},{x:704,y:664,r:15},{x:1092,y:664,r:15},{x:1476,y:664,r:15},
-  {x:320,y:1048,r:15},{x:704,y:1048,r:15},{x:1092,y:1048,r:15},{x:1476,y:1048,r:15},
+  {x:320,y:292,r:10},{x:704,y:292,r:10},{x:1092,y:292,r:10},{x:1476,y:292,r:10},
+  {x:320,y:664,r:10},{x:704,y:664,r:10},{x:1092,y:664,r:10},{x:1476,y:664,r:10},
+  {x:320,y:1048,r:10},{x:704,y:1048,r:10},{x:1092,y:1048,r:10},{x:1476,y:1048,r:10},
 ];
 
 type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
 type Prop = { id: number; x: number; y: number; kind: PropKind; active: boolean; respawnAt: number; body: number; angle: number };
 type Player = {
-  name: string; x: number; y: number; body: number; move: [number, number]; aimAngle: number;
+  name: string; x: number; y: number; prevX: number; prevY: number; body: number; move: [number, number]; aimAngle: number;
   weapon: number; fire: boolean; smash: boolean; fireCooldown: number; smashCooldown: number;
   score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number; shotWeapon: number;
   deathSeq: number; deathX: number; deathY: number;
 };
-type Bullet = { id: number; owner: string; x: number; y: number; vx: number; vy: number; damage: number; life: number; color: string };
+type Bullet = { id: number; owner: string; x: number; y: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
 type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
 type State = {
   players: Record<string, Player>; props: Prop[]; bullets: Bullet[]; particles: Particle[];
@@ -136,7 +136,7 @@ function makeMapPhysics(world: any): void {
   for (const b of BUILDINGS) makeStaticBox(world, b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0.9);
   for (const t of TREES) {
     const body = world.createBody({ type: 'static', position: pl.Vec2(t.x / PPM, t.y / PPM) });
-    // Artwork remains 128x128, but only the visible trunk blocks movement: a 40x40 circle.
+    // Artwork remains 128x128, but only the visible trunk blocks movement: a 20x20 circle.
     body.createFixture(pl.Circle(t.r / PPM), { density: 0, friction: 0.9, restitution: 0.02 });
   }
   // Invisible Box2D walls keep bodies inside the city bounds.
@@ -176,16 +176,52 @@ function propRadius(kind: PropKind): number {
   const cfg = propPhysics(kind);
   return Math.sqrt(cfg.hx * cfg.hx + cfg.hy * cfg.hy);
 }
-function pointHitsCircle(x: number, y: number, cx: number, cy: number, radius: number): boolean {
-  const dx = x - cx, dy = y - cy;
-  return dx * dx + dy * dy <= radius * radius;
+// Swept segment collision prevents fast bullets (especially the M134) from tunnelling
+// through a player or a small object between two 20 Hz simulation frames.
+const BULLET_RADIUS = 3;
+function segmentHitsAabb(x0: number, y0: number, x1: number, y1: number,
+                         minX: number, minY: number, maxX: number, maxY: number): boolean {
+  let tMin = 0, tMax = 1;
+  const dx = x1 - x0, dy = y1 - y0;
+  if (Math.abs(dx) < 0.000001) {
+    if (x0 < minX || x0 > maxX) return false;
+  } else {
+    let a = (minX - x0) / dx, b = (maxX - x0) / dx;
+    if (a > b) { const swap = a; a = b; b = swap; }
+    tMin = Math.max(tMin, a); tMax = Math.min(tMax, b);
+    if (tMin > tMax) return false;
+  }
+  if (Math.abs(dy) < 0.000001) {
+    if (y0 < minY || y0 > maxY) return false;
+  } else {
+    let a = (minY - y0) / dy, b = (maxY - y0) / dy;
+    if (a > b) { const swap = a; a = b; b = swap; }
+    tMin = Math.max(tMin, a); tMax = Math.min(tMax, b);
+    if (tMin > tMax) return false;
+  }
+  return tMax >= 0 && tMin <= 1;
 }
-function pointHitsOrientedBox(x: number, y: number, cx: number, cy: number, angle: number, hx: number, hy: number): boolean {
-  const dx = x - cx, dy = y - cy;
+function segmentHitsCircle(x0: number, y0: number, x1: number, y1: number,
+                           cx: number, cy: number, radius: number): boolean {
+  const dx = x1 - x0, dy = y1 - y0;
+  const lengthSquared = dx * dx + dy * dy;
+  let t = lengthSquared > 0.000001 ? ((cx - x0) * dx + (cy - y0) * dy) / lengthSquared : 0;
+  t = Math.max(0, Math.min(1, t));
+  const closestX = x0 + dx * t, closestY = y0 + dy * t;
+  const ox = closestX - cx, oy = closestY - cy;
+  return ox * ox + oy * oy <= radius * radius;
+}
+function segmentHitsOrientedBox(x0: number, y0: number, x1: number, y1: number,
+                                cx: number, cy: number, angle: number, hx: number, hy: number): boolean {
   const c = Math.cos(angle), s = Math.sin(angle);
-  const localX = dx * c + dy * s;
-  const localY = -dx * s + dy * c;
-  return Math.abs(localX) <= hx && Math.abs(localY) <= hy;
+  const dx0 = x0 - cx, dy0 = y0 - cy;
+  const dx1 = x1 - cx, dy1 = y1 - cy;
+  const localX0 = dx0 * c + dy0 * s;
+  const localY0 = -dx0 * s + dy0 * c;
+  const localX1 = dx1 * c + dy1 * s;
+  const localY1 = -dx1 * s + dy1 * c;
+  return segmentHitsAabb(localX0, localY0, localX1, localY1,
+    -hx - BULLET_RADIUS, -hy - BULLET_RADIUS, hx + BULLET_RADIUS, hy + BULLET_RADIUS);
 }
 function particleColors(kind: PropKind): string[] {
   if (kind === 'car') return ['#e66a25','#454c52','#9dcbd2','#c0cbd0'];
@@ -236,7 +272,7 @@ function muzzlePosition(p: Player): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '7',
+  version: '10',
   tickRate: 20,
   maxPlayers: 32,
   physics: box2dPhysics,
@@ -270,7 +306,7 @@ export default defineSim({
     const spawn = openSpawn(ctx, state);
     const body = makePlayerBody(ctx.physics, spawn.x, spawn.y);
     state.players[id] = {
-      name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y, body,
+      name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y, prevX: spawn.x, prevY: spawn.y, body,
       move: [0, 0], aimAngle: 0, weapon: 0, fire: false, smash: false,
       fireCooldown: 0, smashCooldown: 0, score: 0, health: 100, invulnerable: 45,
       color: ctx.int(6), muzzleFlash: 0, shotSeq: 0, shotWeapon: 0,
@@ -308,6 +344,9 @@ export default defineSim({
     // Set velocities from player inputs in metres/second; body collisions push physical props naturally.
     for (const id of Object.keys(state.players).sort()) {
       const p = state.players[id];
+      // Save the pre-step pose so projectile collision uses relative motion, not just the target's
+      // end-of-tick position. This prevents fast shots missing a moving player between frames.
+      p.prevX = p.x; p.prevY = p.y;
       if (p.fireCooldown > 0) p.fireCooldown--;
       if (p.smashCooldown > 0) p.smashCooldown--;
       if (p.invulnerable > 0) p.invulnerable--;
@@ -380,7 +419,7 @@ export default defineSim({
             id: state.nextBulletId++, owner: id,
             x: muzzle.x, y: muzzle.y,
             vx: Math.cos(a) * weapon.speed, vy: Math.sin(a) * weapon.speed,
-            damage: weapon.damage, life: weapon.life, color: weapon.color,
+            damage: weapon.damage, life: weapon.life, color: weapon.color, bornFrame: ctx.frame, age: 0,
           });
         }
       }
@@ -388,18 +427,31 @@ export default defineSim({
 
     const liveBullets: Bullet[] = [];
     for (const b of state.bullets) {
-      b.x += b.vx; b.y += b.vy; b.life--;
-      if (b.life <= 0 || b.x < 0 || b.y < 0 || b.x > W || b.y > H) continue;
-      if (BUILDINGS.some((building) => b.x >= building.x && b.x <= building.x + building.w && b.y >= building.y && b.y <= building.y + building.h)) continue;
-      if (TREES.some((tree) => pointHitsCircle(b.x, b.y, tree.x, tree.y, tree.r))) continue;
+      // Keep a newly-created projectile at the muzzle for its first rendered frame.
+      // This also makes the visual origin agree with the shooter's confirmed position.
+      if (b.bornFrame === ctx.frame) {
+        liveBullets.push(b);
+        continue;
+      }
+      const x0 = b.x, y0 = b.y;
+      const x1 = b.x + b.vx, y1 = b.y + b.vy;
+      b.x = x1; b.y = y1; b.life--; b.age++;
+      if (b.life <= 0 || x1 < 0 || y1 < 0 || x1 > W || y1 > H) continue;
+      if (BUILDINGS.some((building) => segmentHitsAabb(
+        x0, y0, x1, y1,
+        building.x - BULLET_RADIUS, building.y - BULLET_RADIUS,
+        building.x + building.w + BULLET_RADIUS, building.y + building.h + BULLET_RADIUS,
+      ))) continue;
+      if (TREES.some((tree) => segmentHitsCircle(x0, y0, x1, y1, tree.x, tree.y, tree.r + BULLET_RADIUS))) continue;
 
       let hitProp = false;
       for (const prop of state.props) {
         if (!prop.active) continue;
         const cfg = propPhysics(prop.kind);
-        if (pointHitsOrientedBox(b.x, b.y, prop.x, prop.y, prop.angle || 0, cfg.hx, cfg.hy)) {
+        if (segmentHitsOrientedBox(x0, y0, x1, y1, prop.x, prop.y, prop.angle || 0, cfg.hx, cfg.hy)) {
           destroyProp(state, ctx, prop, state.players[b.owner] || null);
-          hitProp = true; break;
+          hitProp = true;
+          break;
         }
       }
       if (hitProp) continue;
@@ -408,30 +460,42 @@ export default defineSim({
       for (const id of Object.keys(state.players).sort()) {
         if (id === b.owner) continue;
         const target = state.players[id];
-        if (!target || target.invulnerable > 0) continue;
-        if (pointHitsOrientedBox(b.x, b.y, target.x, target.y, target.aimAngle + Math.PI / 2, 21.5, 17.5)) {
-          target.health -= b.damage;
-          const targetBody = bodyFromId(world, target.body);
-          if (targetBody) {
-            const velocity = targetBody.getLinearVelocity();
-            targetBody.setLinearVelocity(pl.Vec2(velocity.x + b.vx * 0.035 / PPM, velocity.y + b.vy * 0.035 / PPM));
-          }
-          if (target.health <= 0) {
-            // Store the actual death location before moving the player to the respawn point.
-            target.deathX = target.x;
-            target.deathY = target.y;
-            target.deathSeq++;
-            const spawn = openSpawn(ctx, state, id);
-            target.x = spawn.x; target.y = spawn.y; target.health = 100;
-            target.invulnerable = 55; target.score = Math.max(0, target.score - 15);
+        if (!target) continue;
+        const previousTargetX = Number.isFinite(target.prevX) ? target.prevX : target.x;
+        const previousTargetY = Number.isFinite(target.prevY) ? target.prevY : target.y;
+        // Work in target-relative coordinates to sweep both projectile and player movement over the tick.
+        if (segmentHitsOrientedBox(
+          x0 - previousTargetX, y0 - previousTargetY,
+          x1 - target.x, y1 - target.y,
+          0, 0, target.aimAngle + Math.PI / 2, 21.5, 17.5,
+        )) {
+          // Player bodies always stop projectiles. Spawn protection prevents damage, not collision,
+          // so bullets cannot visibly pass through a player during the short invulnerability period.
+          if (target.invulnerable <= 0) {
+            target.health -= b.damage;
+            const targetBody = bodyFromId(world, target.body);
             if (targetBody) {
-              targetBody.setTransform(pl.Vec2(spawn.x / PPM, spawn.y / PPM), target.aimAngle + Math.PI / 2);
-              targetBody.setLinearVelocity(pl.Vec2(0, 0));
-              targetBody.setAngularVelocity(0);
+              const velocity = targetBody.getLinearVelocity();
+              targetBody.setLinearVelocity(pl.Vec2(velocity.x + b.vx * 0.035 / PPM, velocity.y + b.vy * 0.035 / PPM));
             }
-            addParticles(state, ctx, b.x, b.y, 'car', 16);
+            if (target.health <= 0) {
+              // Store the exact death location before moving the player to the respawn point.
+              target.deathX = target.x;
+              target.deathY = target.y;
+              target.deathSeq++;
+              const spawn = openSpawn(ctx, state, id);
+              target.x = spawn.x; target.y = spawn.y; target.prevX = spawn.x; target.prevY = spawn.y; target.health = 100;
+              target.invulnerable = 55; target.score = Math.max(0, target.score - 15);
+              if (targetBody) {
+                targetBody.setTransform(pl.Vec2(spawn.x / PPM, spawn.y / PPM), target.aimAngle + Math.PI / 2);
+                targetBody.setLinearVelocity(pl.Vec2(0, 0));
+                targetBody.setAngularVelocity(0);
+              }
+              addParticles(state, ctx, b.x, b.y, 'car', 16);
+            }
           }
-          hitPlayer = true; break;
+          hitPlayer = true;
+          break;
         }
       }
       if (!hitPlayer) liveBullets.push(b);
