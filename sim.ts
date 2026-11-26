@@ -9,7 +9,6 @@ const ROWS = 24;
 const W = COLS * TILE;
 const H = ROWS * TILE;
 const PPM = 32;
-const PLAYER_R = 20;
 const PLAYER_SPAWN_R = 28;
 const MOVE_SPEED = 4.7; // pixels per simulation tick
 const SMASH_RANGE = 60;
@@ -51,17 +50,17 @@ const BUILDINGS: Rect[] = [
   {x:858,y:1240,w:170,h:180,color:'#c78b4a',style:0}, {x:1240,y:1240,w:170,h:180,color:'#8b9fa0',style:2},
   {x:1610,y:1240,w:120,h:180,color:'#d47b37',style:3},
 ];
-type Tree = { x: number; y: number; r: number };
+type Tree = { x: number; y: number; r: number }; // r is half-width/half-height; tree sprite is 128x128.
 const TREES: Tree[] = [
-  {x:288,y:292,r:23},{x:670,y:292,r:23},{x:1060,y:292,r:23},{x:1441,y:292,r:23},{x:1760,y:292,r:23},
-  {x:288,y:664,r:23},{x:670,y:664,r:23},{x:1060,y:664,r:23},{x:1441,y:664,r:23},{x:1760,y:664,r:23},
-  {x:288,y:1048,r:23},{x:670,y:1048,r:23},{x:1060,y:1048,r:23},{x:1441,y:1048,r:23},{x:1760,y:1048,r:23},
+  {x:320,y:292,r:64},{x:704,y:292,r:64},{x:1092,y:292,r:64},{x:1476,y:292,r:64},
+  {x:320,y:664,r:64},{x:704,y:664,r:64},{x:1092,y:664,r:64},{x:1476,y:664,r:64},
+  {x:320,y:1048,r:64},{x:704,y:1048,r:64},{x:1092,y:1048,r:64},{x:1476,y:1048,r:64},
 ];
 
 type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
 type Prop = { id: number; x: number; y: number; kind: PropKind; active: boolean; respawnAt: number; body: number; angle: number };
 type Player = {
-  name: string; x: number; y: number; body: number; move: [number, number]; angle: number;
+  name: string; x: number; y: number; body: number; move: [number, number]; aimAngle: number;
   weapon: number; fire: boolean; smash: boolean; fireCooldown: number; smashCooldown: number;
   score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number;
 };
@@ -73,17 +72,17 @@ type State = {
 };
 
 const PROP_SEEDS: Array<{x:number;y:number;kind:PropKind}> = [
-  {x:356,y:350,kind:'bin'},{x:390,y:382,kind:'crate'},{x:630,y:360,kind:'hydrant'},
+  {x:402,y:320,kind:'bin'},{x:390,y:382,kind:'crate'},{x:620,y:360,kind:'hydrant'},
   {x:660,y:390,kind:'cone'},{x:1000,y:350,kind:'bench'},{x:1040,y:380,kind:'bin'},
-  {x:1366,y:354,kind:'crate'},{x:1400,y:385,kind:'hydrant'},{x:356,y:738,kind:'car'},
-  {x:624,y:740,kind:'bin'},{x:660,y:760,kind:'crate'},{x:970,y:735,kind:'cone'},
-  {x:1384,y:740,kind:'bench'},{x:356,y:1125,kind:'hydrant'},{x:624,y:1125,kind:'car'},
+  {x:1366,y:354,kind:'crate'},{x:1420,y:385,kind:'hydrant'},{x:420,y:738,kind:'car'},
+  {x:610,y:740,kind:'bin'},{x:660,y:760,kind:'crate'},{x:970,y:735,kind:'cone'},
+  {x:1384,y:740,kind:'bench'},{x:400,y:1125,kind:'hydrant'},{x:580,y:1125,kind:'car'},
   {x:1000,y:1125,kind:'bin'},{x:1384,y:1125,kind:'crate'},{x:356,y:1510,kind:'cone'},
   {x:624,y:1510,kind:'bin'},{x:1000,y:1510,kind:'hydrant'},{x:1384,y:1510,kind:'bench'},
   {x:870,y:350,kind:'crate'},{x:900,y:750,kind:'bin'},{x:870,y:1120,kind:'cone'},
 ];
 
-function circleHitsRect(x: number, y: number, r: number, b: Rect): boolean {
+function circleHitsRect(x: number, y: number, r: number, b: { x: number; y: number; w: number; h: number }): boolean {
   const cx = Math.max(b.x, Math.min(x, b.x + b.w));
   const cy = Math.max(b.y, Math.min(y, b.y + b.h));
   const dx = x - cx, dy = y - cy;
@@ -91,10 +90,7 @@ function circleHitsRect(x: number, y: number, r: number, b: Rect): boolean {
 }
 function blocked(x: number, y: number): boolean {
   if (BUILDINGS.some((b) => circleHitsRect(x, y, PLAYER_SPAWN_R, b))) return true;
-  return TREES.some((t) => {
-    const dx = x - t.x, dy = y - t.y, rr = PLAYER_SPAWN_R + t.r + 2;
-    return dx * dx + dy * dy < rr * rr;
-  });
+  return TREES.some((t) => circleHitsRect(x, y, PLAYER_SPAWN_R, { x: t.x - t.r, y: t.y - t.r, w: t.r * 2, h: t.r * 2 }));
 }
 function openSpawn(ctx: any, state?: any, excludedPlayer = ''): {x:number;y:number} {
   for (let tries = 0; tries < 100; tries++) {
@@ -135,7 +131,7 @@ function makeMapPhysics(world: any): void {
   for (const b of BUILDINGS) makeStaticBox(world, b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0.9);
   for (const t of TREES) {
     const body = world.createBody({ type: 'static', position: pl.Vec2(t.x / PPM, t.y / PPM) });
-    body.createFixture(pl.Circle((t.r + 2) / PPM), { density: 0, friction: 0.9, restitution: 0.02 });
+    body.createFixture(pl.Box(t.r / PPM, t.r / PPM), { density: 0, friction: 0.9, restitution: 0.02 });
   }
   // Invisible Box2D walls keep bodies inside the city bounds.
   makeStaticBox(world, -20, H / 2, 20, H / 2 + 30, 0.9);
@@ -152,25 +148,35 @@ function makePlayerBody(world: any, x: number, y: number): number {
   body.setAngularDamping(12);
   return bodyId(world, body);
 }
-function propPhysics(kind: PropKind): { hx:number;hy:number;density:number;friction:number;bounce:number;circle?:boolean } {
-  if (kind === 'car') return {hx:29,hy:15,density:2.4,friction:0.82,bounce:0.03};
-  if (kind === 'bench') return {hx:19,hy:8,density:0.8,friction:0.9,bounce:0.02};
-  if (kind === 'crate') return {hx:15,hy:15,density:1.25,friction:0.68,bounce:0.12};
-  if (kind === 'hydrant') return {hx:11,hy:11,density:1.7,friction:0.62,bounce:0.08,circle:true};
-  if (kind === 'cone') return {hx:10,hy:12,density:0.32,friction:0.5,bounce:0.24};
-  return {hx:11,hy:14,density:0.7,friction:0.55,bounce:0.06};
+function propPhysics(kind: PropKind): { hx:number;hy:number;density:number;friction:number;bounce:number } {
+  // Half-extents match the rendered object's actual width/height in world pixels.
+  if (kind === 'car') return {hx:30,hy:16,density:2.4,friction:0.82,bounce:0.03};         // 60x32
+  if (kind === 'bench') return {hx:17,hy:13,density:0.8,friction:0.9,bounce:0.02};         // 34x26
+  if (kind === 'crate') return {hx:25,hy:25,density:1.25,friction:0.68,bounce:0.12};       // 50x50
+  if (kind === 'hydrant') return {hx:13,hy:14.5,density:1.7,friction:0.62,bounce:0.08};   // 26x29
+  if (kind === 'cone') return {hx:15,hy:16,density:0.32,friction:0.5,bounce:0.24};         // 30x32
+  return {hx:13,hy:14.5,density:0.7,friction:0.55,bounce:0.06};                            // bin: 26x29
 }
 function makePropBody(world: any, prop: Prop): number {
   const cfg = propPhysics(prop.kind);
   const body = world.createBody({ type: 'dynamic', position: pl.Vec2(prop.x / PPM, prop.y / PPM), angle: prop.angle || 0 });
-  const shape = cfg.circle ? pl.Circle(cfg.hx / PPM) : pl.Box(cfg.hx / PPM, cfg.hy / PPM);
-  body.createFixture(shape, { density: cfg.density, friction: cfg.friction, restitution: cfg.bounce });
+  body.createFixture(pl.Box(cfg.hx / PPM, cfg.hy / PPM), { density: cfg.density, friction: cfg.friction, restitution: cfg.bounce });
   body.setLinearDamping(2.8);
   body.setAngularDamping(4.5);
   return bodyId(world, body);
 }
 function propPoints(kind: PropKind): number { return kind === 'car' ? 35 : kind === 'bench' ? 20 : 10; }
-function propRadius(kind: PropKind): number { return kind === 'car' ? 31 : kind === 'bench' ? 24 : 17; }
+function propRadius(kind: PropKind): number {
+  const cfg = propPhysics(kind);
+  return Math.sqrt(cfg.hx * cfg.hx + cfg.hy * cfg.hy);
+}
+function pointHitsOrientedBox(x: number, y: number, cx: number, cy: number, angle: number, hx: number, hy: number): boolean {
+  const dx = x - cx, dy = y - cy;
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const localX = dx * c + dy * s;
+  const localY = -dx * s + dy * c;
+  return Math.abs(localX) <= hx && Math.abs(localY) <= hy;
+}
 function particleColors(kind: PropKind): string[] {
   if (kind === 'car') return ['#e66a25','#454c52','#9dcbd2','#c0cbd0'];
   if (kind === 'bench' || kind === 'crate') return ['#b77b43','#dba05f','#80512f','#e6b975'];
@@ -215,12 +221,12 @@ function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null):
 }
 function muzzlePosition(p: Player): {x:number;y:number} {
   // Local weapon grip is (8, 4); barrel runs toward local up. Convert through the sprite's +90° facing offset.
-  return { x: p.x + Math.cos(p.angle) * 25 - Math.sin(p.angle) * 8, y: p.y + Math.sin(p.angle) * 25 + Math.cos(p.angle) * 8 };
+  return { x: p.x + Math.cos(p.aimAngle) * 25 - Math.sin(p.aimAngle) * 8, y: p.y + Math.sin(p.aimAngle) * 25 + Math.cos(p.aimAngle) * 8 };
 }
 
 export default defineSim({
   name: 'chaos-city',
-  version: '3',
+  version: '4',
   tickRate: 20,
   maxPlayers: 32,
   physics: box2dPhysics,
@@ -232,7 +238,14 @@ export default defineSim({
     const body = bodyFromId(physics, player.body);
     if (!body) return null;
     const pos = body.getPosition();
-    return { x: Math.round(pos.x * 100) / 100, y: Math.round(pos.y * 100) / 100, angle: Math.round(body.getAngle() * 1000) / 1000 };
+    return {
+      // Player x/y are stored in world pixels, while Planck uses metres (32 px per metre).
+      x: Math.round(pos.x * PPM * 100) / 100,
+      y: Math.round(pos.y * PPM * 100) / 100,
+      // Keep physical angle (used for prediction) separate from the cursor's aim angle (used by rendering).
+      angle: Math.round(body.getAngle() * 1000) / 1000,
+      aimAngle: player.aimAngle,
+    };
   },
 
   init(ctx): State {
@@ -248,7 +261,7 @@ export default defineSim({
     const body = makePlayerBody(ctx.physics, spawn.x, spawn.y);
     state.players[id] = {
       name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y, body,
-      move: [0, 0], angle: 0, weapon: 0, fire: false, smash: false,
+      move: [0, 0], aimAngle: 0, weapon: 0, fire: false, smash: false,
       fireCooldown: 0, smashCooldown: 0, score: 0, health: 100, invulnerable: 45,
       color: ctx.int(6), muzzleFlash: 0, shotSeq: 0,
     };
@@ -265,7 +278,7 @@ export default defineSim({
     const p = state.players[id];
     if (!p) return;
     p.move = [input.move[0] / 127, input.move[1] / 127];
-    p.angle = (input.aim / 65535) * Math.PI * 2;
+    p.aimAngle = (input.aim / 65535) * Math.PI * 2;
     p.weapon = Math.max(0, Math.min(3, input.weapon | 0));
     p.fire = !!input.buttons.fire;
     p.smash = !!input.buttons.smash;
@@ -294,7 +307,7 @@ export default defineSim({
       const body = bodyFromId(world, p.body);
       if (body) {
         // Rotate the collision box with the same corrected angle used to draw the up-facing sprite.
-        body.setTransform(body.getPosition(), p.angle + Math.PI / 2);
+        body.setTransform(body.getPosition(), p.aimAngle + Math.PI / 2);
         body.setAngularVelocity(0);
         body.setLinearVelocity(pl.Vec2(mx * MOVE_SPEED * ctx.tickRate / PPM, my * MOVE_SPEED * ctx.tickRate / PPM));
       }
@@ -350,7 +363,7 @@ export default defineSim({
         p.muzzleFlash = 2;
         p.shotSeq++;
         for (let pellet = 0; pellet < weapon.pellets && state.bullets.length < 350; pellet++) {
-          const a = p.angle + (ctx.rng() - 0.5) * weapon.spread;
+          const a = p.aimAngle + (ctx.rng() - 0.5) * weapon.spread;
           state.bullets.push({
             id: state.nextBulletId++, owner: id,
             x: muzzle.x, y: muzzle.y,
@@ -366,16 +379,13 @@ export default defineSim({
       b.x += b.vx; b.y += b.vy; b.life--;
       if (b.life <= 0 || b.x < 0 || b.y < 0 || b.x > W || b.y > H) continue;
       if (BUILDINGS.some((building) => b.x >= building.x && b.x <= building.x + building.w && b.y >= building.y && b.y <= building.y + building.h)) continue;
-      if (TREES.some((tree) => {
-        const dx = b.x - tree.x, dy = b.y - tree.y;
-        return dx * dx + dy * dy < tree.r * tree.r;
-      })) continue;
+      if (TREES.some((tree) => pointHitsOrientedBox(b.x, b.y, tree.x, tree.y, 0, tree.r, tree.r))) continue;
 
       let hitProp = false;
       for (const prop of state.props) {
         if (!prop.active) continue;
-        const dx = prop.x - b.x, dy = prop.y - b.y, r = propRadius(prop.kind);
-        if (dx * dx + dy * dy <= r * r) {
+        const cfg = propPhysics(prop.kind);
+        if (pointHitsOrientedBox(b.x, b.y, prop.x, prop.y, prop.angle || 0, cfg.hx, cfg.hy)) {
           destroyProp(state, ctx, prop, state.players[b.owner] || null);
           hitProp = true; break;
         }
@@ -387,8 +397,7 @@ export default defineSim({
         if (id === b.owner) continue;
         const target = state.players[id];
         if (!target || target.invulnerable > 0) continue;
-        const dx = target.x - b.x, dy = target.y - b.y;
-        if (dx * dx + dy * dy <= (PLAYER_R + 3) * (PLAYER_R + 3)) {
+        if (pointHitsOrientedBox(b.x, b.y, target.x, target.y, target.aimAngle + Math.PI / 2, 21.5, 17.5)) {
           target.health -= b.damage;
           const targetBody = bodyFromId(world, target.body);
           if (targetBody) {
@@ -400,7 +409,7 @@ export default defineSim({
             target.x = spawn.x; target.y = spawn.y; target.health = 100;
             target.invulnerable = 55; target.score = Math.max(0, target.score - 15);
             if (targetBody) {
-              targetBody.setTransform(pl.Vec2(spawn.x / PPM, spawn.y / PPM), target.angle + Math.PI / 2);
+              targetBody.setTransform(pl.Vec2(spawn.x / PPM, spawn.y / PPM), target.aimAngle + Math.PI / 2);
               targetBody.setLinearVelocity(pl.Vec2(0, 0));
               targetBody.setAngularVelocity(0);
             }

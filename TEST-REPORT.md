@@ -1,16 +1,15 @@
-# Chaos City.io update — verification status
+# Chaos City.io — aim and collider fix verification
 
-## Completed locally
+## Completed checks
 
-- `sim.ts`, `server.ts`, and `client/main.ts` passed `tsc --noEmit` with temporary ambient declarations for the unavailable modd.io SDK modules.
-- An isolated smoke harness with a mock Planck-compatible world exercised player body creation, movement, shot sequencing, smash/destruction, physical debris-body creation, projectile damage, and the player-pose fingerprint. This exercises game logic calls but does **not** verify the real Planck collision solver.
-- `moddio.json` parses as JSON and preserves the existing game slug `untitled-game-b8a1fb`.
-- Player sprite render call uses its exact 43×35 source dimensions in world space, with a +90° correction for a sprite whose default facing direction is up.
-- Weapon render anchors share the same local transform as the player; muzzle spark uses the same muzzle coordinate convention as projectile spawning.
-- All three provided MP3s are copied into `assets/audio/` and assigned to the requested weapons.
-- Physics is configured with the modd.io Planck adapter: static building/tree/bounds colliders, dynamic player bodies, dynamic object bodies, and short-lived physical debris bodies. Dimensions are converted from pixel coordinates using 32 px per physics metre; a player-pose fingerprint supports self-prediction and Planck is set to canonicalise every 100 frames.
-- Renderer object rotation is driven by the physics angle; sound is local-only and does not affect the simulation state.
+- TypeScript syntax/type pass completed with `tsc --noEmit` and temporary ambient declarations for the modd.io modules. This is a local source check, not the official SDK type checker.
+- The local prediction fingerprint now converts Planck positions (metres) into the same world-pixel units used by `Player.x` and `Player.y`; it preserves the physical body angle separately from `aimAngle`. This resolves the local-player self-merge unit/angle mismatch that could make the camera and mouse aiming appear not to follow the pointer.
+- Cursor-to-world conversion now inverts the exact draw transform: `world = camera + screen / zoom`. Cardinal direction checks confirm the up-facing sprite with a +90-degree offset points right, down, left, and up at the corresponding cursor directions.
+- Player collider and draw size are both 43×35 world pixels. Tree artwork/collider are both 128×128. Object fixtures align to their rendered dimensions: car 60×32, bench 34×26, crate 50×50, hydrant 26×29, cone 30×32 and bin 26×29. Projectile checks now use oriented rectangles for trees, props, and players.
+- Checked initial prop locations: no overlap among starting props, native-size tree colliders, or building rectangles.
+- Confirmed the three weapon MP3 files and the supplied player/tree/tile assets remain bundled under relative project paths.
+- `moddio.json` remains valid and preserves the existing game slug `untitled-game-b8a1fb`; sim version was bumped to `4`.
 
-## Not yet verified in the official runtime
+## Still required in the actual modd.io runtime
 
-Installing the actual `@moddio/sim` / client dependencies failed because npm could not resolve `registry.npmjs.org` (`EAI_AGAIN`), so the actual package is not installed in this environment. The official `npx moddio test`, browser prediction/replay tests, and `npx moddio play` have not been run on this updated version. Install the SDK dependencies and run those checks before publishing. In particular, validate Planck rollback/determinism in the actual modd.io test, since a local type check cannot prove cross-engine physics determinism.
+The official `npx moddio test` and `npx moddio play --players 2` could not be run here because the actual npm SDK dependency installation previously failed to resolve the npm registry (`EAI_AGAIN`). Before publishing, test local-player aiming, remote-player aiming, hand alignment at all four cardinal directions, collisions near buildings/trees, touch controls, and cross-engine deterministic physics using the real modd.io SDK.
