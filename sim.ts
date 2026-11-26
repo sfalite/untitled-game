@@ -155,7 +155,7 @@ type Player = {
   name: string; x: number; y: number; prevX: number; prevY: number; body: number; move: [number, number]; aimAngle: number;
   /** Selected inventory slot (0-4). Actual weapon IDs live in inventory. */
   weapon: number; inventory: Array<number | null>;
-  fire: boolean; smash: boolean; pickup: boolean; drop: boolean;
+  fire: boolean; fireWasDown: boolean; smash: boolean; pickup: boolean; drop: boolean;
   clientShotToken: number; lastFiredClientShotToken: number;
   pickupWasDown: boolean; dropWasDown: boolean;
   fireCooldown: number; smashCooldown: number; punchCooldown: number; punchFlash: number;
@@ -463,7 +463,7 @@ function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '21',
+  version: '22',
   tickRate: 20,
   maxPlayers: 32,
   // Predict only the local player. The SDK interpolates remote players from authoritative
@@ -502,7 +502,7 @@ export default defineSim({
     const body = makePlayerBody(ctx.physics, spawn.x, spawn.y);
     state.players[id] = {
       name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y, prevX: spawn.x, prevY: spawn.y, body,
-      move: [0, 0], aimAngle: 0, weapon: 0, inventory: [0, null, null, null, null], fire: false, smash: false, pickup: false, drop: false,
+      move: [0, 0], aimAngle: 0, weapon: 0, inventory: [0, null, null, null, null], fire: false, fireWasDown: false, smash: false, pickup: false, drop: false,
       clientShotToken: 0, lastFiredClientShotToken: 0,
       pickupWasDown: false, dropWasDown: false,
       fireCooldown: 0, smashCooldown: 0, punchCooldown: 0, punchFlash: 0, score: 0, health: 100, invulnerable: 45,
@@ -671,7 +671,9 @@ export default defineSim({
           break;
         }
       }
-      if (p.fire && typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPONS.length && p.fireCooldown <= 0 && state.bullets.length < 350 && !p.drop && p.clientShotToken !== p.lastFiredClientShotToken) {
+      const semiAutomatic = equippedWeaponId === 0 || equippedWeaponId === 4; // Glock-17 and Shotgun fire once per press.
+      const firePressedThisFrame = p.fire && !p.fireWasDown;
+      if (p.fire && (!semiAutomatic || firePressedThisFrame) && typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPONS.length && p.fireCooldown <= 0 && state.bullets.length < 350 && !p.drop && p.clientShotToken !== p.lastFiredClientShotToken) {
         const weapon = WEAPONS[equippedWeaponId];
         const muzzle = muzzlePosition(p, equippedWeaponId);
         p.fireCooldown = weapon.cooldown;
@@ -697,6 +699,9 @@ export default defineSim({
           });
         }
       }
+      // Remember the held trigger for edge-triggered semiautomatic weapons. Automatic weapons
+      // still repeat while held, but only when the client sends a fresh cooldown-ready token.
+      p.fireWasDown = p.fire;
     }
 
     const liveBullets: Bullet[] = [];

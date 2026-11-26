@@ -144,3 +144,11 @@ Test in the modd.io browser after running `npx moddio test` and `npx moddio dev`
 Provisional local tracers now run continuous collision checks against buildings, tree trunks, dynamic props, and other players before each draw. Confirmed projectiles are no longer extrapolated forward beyond the authoritative/interpolated simulation position, preventing visual tracers from continuing through obstacles because of interpolation delay. Projectile damage and removal remain server-authoritative. Simulation version is 21.
 
 Local TypeScript and collision-helper tests passed. The official modd.io test and a live multiplayer browser test still need to be run after installation.
+
+
+## Update v18 — single-click shot de-duplication
+- Glock-17 and Shotgun use a server-enforced rising edge: one mouse/key press can create at most one shot.
+- AK-47, M249, and M134 fire immediately on press and repeat only after the trigger has intentionally been held for 260 ms; release/re-press always starts a new burst.
+- Client prediction no longer keeps an unmatched tracer visible after its shot token is already confirmed by the room, preventing a provisional tracer and a confirmed projectile from appearing together.
+- Local fire state resets when the game worker is started again. Mouse presses are classified as gameplay or inventory/UI clicks at their initial press coordinate and stay in that category until release.
+- Official modd.io CLI/runtime multiplayer testing remains necessary.

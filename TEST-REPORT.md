@@ -152,3 +152,25 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3`,
 
 ### Not performed
 - Official `npx moddio test`, `npx moddio play`, or a live browser multiplayer test. Local collision rendering checks do not replace validation in the real modd.io runtime.
+
+
+## Update v18 checks
+- Added server-side `fireWasDown` state so Glock-17 and Shotgun require a rising edge; held inputs cannot repeatedly fire either semiautomatic weapon.
+- Client fires semiautomatic weapons only on press edges and waits 260 ms of continuous hold before automatic weapons begin repeating, so a normal click produces one round while deliberate holds preserve full-auto behavior. Mouse presses that start over an inventory slot are marked as UI-only until release; moving a held click across a slot cannot synthesize a second trigger edge.
+- Removed the 180 ms grace period for unmatched local predicted tracers after the authoritative shot token is confirmed, eliminating a known visual duplicate window.
+- Bumped sim version to 22.
+- Local TypeScript syntax and state/input checks are run during packaging; official `npx moddio test` and live browser multiplayer testing are not available in this environment.
+
+
+## Update v18 — single-click firing fix
+
+### Local checks performed
+- TypeScript no-emit compilation passed for `sim.ts`, `server.ts`, and `client/main.ts` using the temporary ambient declarations for the SDK.
+- Source checks verified server-side rising-edge enforcement for the Glock-17 and Shotgun, edge detection in the client, a 260 ms intentional-hold threshold before automatic weapons repeat, and removal of the 180 ms provisional-tracer grace window after shot-token confirmation.
+- An isolated trigger-policy test passed: a 200 ms short press produces one shot for all weapons; holding Glock/Shotgun produces one shot; deliberately holding AK-47/M249/M134 continues automatic fire.
+- Confirmed the renderer discards unmatched provisional tracers immediately once the corresponding shot token is confirmed, preventing a duplicate provisional + authoritative visual.
+- Package asset paths and ZIP integrity will be checked during packaging.
+
+### Not performed
+- Official `npx moddio test` / `npx moddio play` with the installed production SDK.
+- Live browser multiplayer testing. Server-side input ordering and remote room reconciliation should be confirmed in the real modd.io runtime.
