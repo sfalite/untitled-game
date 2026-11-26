@@ -81,3 +81,25 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3`,
 - Source checks confirmed pickup radius and HUD prompt both use 64 pixels, input sends held E/G state, simulation uses rising-edge detection, the Glock visual offset is moved forward, and the muzzle flash/muzzle position both use 18 pixels.
 - Removed custom fist art from player rendering and empty inventory/menu slots. Empty slots are labeled `EMPTY`; server-side punch damage remains active.
 - These are local compile/smoke checks with a fake physics world. Official `npx moddio test`, actual Planck adapter execution, and live browser multiplayer testing were not performed.
+
+
+## Update v12 changes checked
+- Confirmed equipped Glock local offset, muzzle-flash offset, and sim projectile spawn use a matching 27-pixel forward distance.
+- Confirmed pickup rendering centers each weapon silhouette using per-weapon local bounds, with horizontal correction for the Glock.
+- Confirmed sim version bumped to 14.
+- Official `npx moddio test` and in-browser multiplayer visual validation were not run in this environment.
+
+
+## Update v13 — muzzle and multiplayer visual correction
+
+### Passed local checks
+- TypeScript no-emit compilation completed for `sim.ts`, `server.ts`, and `client/main.ts` using temporary ambient declarations for the modd.io modules. This confirms syntax and locally visible types, not compatibility with the official SDK implementation.
+- Confirmed the simulation and renderer use matching weapon muzzle-forward offsets: Glock-17 27px, AK-47 25px, M249 26px, M134 22px, Shotgun 25px, with an 8px right-side local offset.
+- Mathematically checked, for all five weapons at 0°, 45°, 90°, 180°, and 270°, that the world-space muzzle formula equals rotating the same local muzzle point by `aimAngle + 90°`, matching the sprite transform.
+- Confirmed every bullet stores its `weaponId`, `spawnX`, and `spawnY`; newly spawned bullet visuals for local and remote players use a decaying offset from the displayed owner's muzzle to account for prediction/interpolation delay.
+- Removed the prior local-only bullet nudge that shifted coordinates without considering rotation. The correction is rendering-only; authoritative positions, collision and damage are unchanged.
+- `moddio.json` remains valid JSON, required audio/image assets remain present, and ZIP integrity check passed.
+
+### Not performed
+- Official `npx moddio test` / `npx moddio play` with the actual modd.io SDK.
+- Live-browser test with three connected players. Network-interpolation behavior must still be confirmed in the real modd.io runtime.

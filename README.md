@@ -98,3 +98,18 @@ Test in the modd.io browser after running `npx moddio test` and `npx moddio dev`
 - Removed the custom fist overlay on the player and fist drawings from empty inventory/loadout slots. The character's supplied sprite keeps its own hands; empty slots are shown as EMPTY.
 - Empty-slot punches retain server-authoritative damage, with range increased from 42 to 50 world pixels; attack direction, cooldown, spawn protection, knockback and death handling remain in the simulation.
 - TypeScript/static asset checks are recommended before publishing; no claim of official modd.io runtime validation is made by this package.
+
+
+## Update v12 — Glock placement and weapon-drop alignment
+- Moved the equipped Glock-17 8 world pixels farther forward along its muzzle direction.
+- Updated the Glock muzzle-flash anchor and authoritative projectile spawn to match the new visual muzzle position.
+- Recentered dropped weapon silhouettes in their orange pickup markers, including a horizontal correction for the asymmetrical Glock grip.
+- Bumped the deterministic sim version to 14.
+
+
+## Update v13 — multiplayer muzzle alignment
+
+- Unified weapon muzzle offsets between the simulation and renderer: Glock 27px, AK-47 25px, M249 26px, M134 22px (center of the barrel cluster), Shotgun 25px forward, each with an 8px right-hand offset in player-local space.
+- Bullet state records its authoritative spawn point and weapon ID. Client rendering now applies the same short-lived visual correction to every player's newly spawned bullets, not only the local player's bullets. The correction follows the rendered owner's current muzzle for the first two ticks and fades out by tick three.
+- Removed the older local-only X/Y prediction nudge, which ignored aim rotation and could shift shots sideways while the player rotated. The visual correction does not affect server-authoritative trajectories, collision, or damage.
+- Added TypeScript and source/muzzle-transform checks. Official modd.io runtime and live multiplayer browser tests remain unperformed in this environment.

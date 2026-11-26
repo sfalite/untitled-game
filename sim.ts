@@ -162,7 +162,7 @@ type Player = {
   deathSeq: number; deathX: number; deathY: number;
 };
 type WeaponPickup = { id: number; x: number; y: number; weaponId: number; angle: number; createdFrame: number };
-type Bullet = { id: number; owner: string; x: number; y: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
+type Bullet = { id: number; owner: string; x: number; y: number; spawnX: number; spawnY: number; weaponId: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
 type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
 type State = {
   players: Record<string, Player>; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[];
@@ -433,18 +433,24 @@ function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null):
     spawnWeaponPickup(state, weaponId, prop.x, prop.y, ctx.rng() * Math.PI * 2, ctx.frame);
   }
 }
+const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 22, 25] as const;
+const WEAPON_MUZZLE_SIDE = 8;
 function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
-  // The Glock has a shorter barrel; long guns share the grip-to-muzzle offset.
-  const barrelLength = weaponId === 0 ? 18 : weaponId === 3 ? 27 : 25;
+  // Match the exact local coordinates used by drawWeaponLocal + drawWeaponShape:
+  // Glock (8,-27), AK (8,-25), M249 (8,-26), M134 barrel cluster (8,-22), Shotgun (8,-25).
+  // Converting the sprite's muzzle point and the bullet origin from this one definition
+  // prevents different weapons from firing a visible distance away from their barrel.
+  const forward = WEAPON_MUZZLE_FORWARD[weaponId] ?? WEAPON_MUZZLE_FORWARD[0];
+  const a = p.aimAngle;
   return {
-    x: p.x + Math.cos(p.aimAngle) * barrelLength - Math.sin(p.aimAngle) * 8,
-    y: p.y + Math.sin(p.aimAngle) * barrelLength + Math.cos(p.aimAngle) * 8,
+    x: p.x + Math.cos(a) * forward - Math.sin(a) * WEAPON_MUZZLE_SIDE,
+    y: p.y + Math.sin(a) * forward + Math.cos(a) * WEAPON_MUZZLE_SIDE,
   };
 }
 
 export default defineSim({
   name: 'chaos-city',
-  version: '13',
+  version: '15',
   tickRate: 20,
   maxPlayers: 32,
   physics: box2dPhysics,
@@ -656,7 +662,8 @@ export default defineSim({
           const a = p.aimAngle + (ctx.rng() - 0.5) * weapon.spread;
           state.bullets.push({
             id: state.nextBulletId++, owner: id,
-            x: muzzle.x, y: muzzle.y,
+            x: muzzle.x, y: muzzle.y, spawnX: muzzle.x, spawnY: muzzle.y,
+            weaponId: equippedWeaponId,
             vx: Math.cos(a) * weapon.speed, vy: Math.sin(a) * weapon.speed,
             damage: weapon.damage, life: weapon.life, color: weapon.color, bornFrame: ctx.frame, age: 0,
           });
