@@ -40,6 +40,7 @@ let pixiAvailable = false;
 let pixiPrototypeEnabled = false;
 let pixiInitPromise: Promise<boolean> | null = null;
 let pixiStatus = 'CANVAS2D BASELINE';
+let pixiErrorMessage = '';
 let pixiNotice = '';
 let pixiNoticeUntil = 0;
 let pixiRendererWidth = 0;
@@ -466,8 +467,12 @@ function buildPixiStaticWorld(): PixiContainer {
         buildings.roundRect(wx, wy, 17, 19, 3).fill({ color: 0x1a2d30, alpha: 0.62 });
       }
     }
-    buildings.roundRect(b.x + 4, b.y + 4, b.w - 8, b.h - 8, 7)
-      .stroke({ color: 0xffffff, alpha: 0.3, width: 2 });
+    // Temporary, deliberate cyan edge makes the Pixi A/B mode visibly identifiable.
+    // This is a renderer-test highlight only; it does not change map/collision data.
+    buildings.roundRect(b.x - 1, b.y - 1, b.w + 2, b.h + 2, 10)
+      .stroke({ color: 0x45e6f2, alpha: 0.28, width: 8 });
+    buildings.roundRect(b.x + 2, b.y + 2, b.w - 4, b.h - 4, 8)
+      .stroke({ color: 0x45e6f2, alpha: 0.98, width: 3 });
   }
   root.addChild(buildings);
   return root;
@@ -503,13 +508,15 @@ async function ensurePixiRenderer(): Promise<boolean> {
       pixiRendererHeight = Math.max(1, view.height);
       pixiAvailable = true;
       pixiStatus = 'PIXIJS STATIC WORLD READY';
+      pixiErrorMessage = '';
       return true;
     } catch (error) {
       pixiCanvas.style.display = 'none';
       pixiAvailable = false;
       pixiPrototypeEnabled = false;
       pixiStatus = 'PIXI INIT FAILED · CANVAS2D FALLBACK';
-      pixiNotice = 'PixiJS unavailable; Canvas2D renderer remains active';
+      pixiErrorMessage = String((error as any)?.message || error || 'unknown initialization error').slice(0, 180);
+      pixiNotice = 'PixiJS failed; Canvas2D remains active · check F3';
       pixiNoticeUntil = performance.now() + 4000;
       try { (initializingApp as any)?.destroy({ removeView: false }, { children: true, texture: false, textureSource: false, context: true }); } catch {}
       pixiApp = null;
@@ -533,6 +540,7 @@ async function togglePixiRendererPrototype(): Promise<void> {
     return;
   }
   pixiStatus = 'INITIALIZING PIXIJS…';
+  pixiErrorMessage = '';
   pixiNotice = 'Initializing PixiJS static-world prototype…';
   pixiNoticeUntil = performance.now() + 3500;
   const ready = await ensurePixiRenderer();
@@ -563,7 +571,8 @@ function renderPixiStaticWorld(camX: number, camY: number, zoom: number): boolea
     pixiPrototypeEnabled = false;
     pixiCanvas.style.display = 'none';
     pixiStatus = 'PIXI RENDER ERROR · CANVAS2D FALLBACK';
-    pixiNotice = 'PixiJS render failed; Canvas2D restored';
+    pixiErrorMessage = String((error as any)?.message || error || 'unknown render error').slice(0, 180);
+    pixiNotice = 'PixiJS render failed; Canvas2D restored · check F3';
     pixiNoticeUntil = performance.now() + 4000;
     return false;
   }
@@ -1237,6 +1246,24 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#ffffff'; ctx.font = w < 440 ? 'bold 12px system-ui' : 'bold 15px system-ui'; ctx.fillText(`Score  ${mine.score}`, 27, 60);
   ctx.fillStyle = '#c5d3d7'; ctx.font = '11px system-ui'; ctx.fillText(`${Object.keys(state.players || {}).length} PLAYER(S)`, 27, 77);
 
+  // Always-visible renderer badge makes it clear whether pressing N actually switched modes.
+  // Pixi mode has a cyan building-edge highlight as a temporary A/B test marker.
+  const pixiActive = pixiPrototypeEnabled && pixiAvailable;
+  const pixiFailed = pixiStatus.includes('FAILED') || pixiStatus.includes('ERROR');
+  const badgeText = pixiActive ? 'PIXIJS WEBGL ACTIVE · N TO SWITCH'
+    : pixiFailed ? 'PIXIJS UNAVAILABLE · F3 FOR DETAILS'
+    : pixiStatus.includes('INITIALIZING') ? 'PIXIJS INITIALIZING…'
+    : 'CANVAS2D BASELINE · N TO TEST PIXI';
+  const badgeW = Math.min(w - 28, 250);
+  ctx.fillStyle = pixiActive ? 'rgba(0,67,76,.96)' : pixiFailed ? 'rgba(95,35,35,.94)' : 'rgba(14,25,31,.78)';
+  roundRect(ctx, 14, 94, badgeW, 23, 7);
+  ctx.strokeStyle = pixiActive ? '#45e6f2' : pixiFailed ? '#ff8e80' : 'rgba(210,230,224,.28)';
+  ctx.lineWidth = pixiActive ? 2 : 1;
+  strokeRoundRect(ctx, 14.5, 94.5, badgeW - 1, 22, 7);
+  ctx.fillStyle = pixiActive ? '#e2fdff' : pixiFailed ? '#ffe8e5' : '#d7e2e5';
+  ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'left';
+  ctx.fillText(badgeText, 22, 109, badgeW - 16);
+
   // Five-slot inventory. Slot 5 is intentionally empty-handed and never renders a weapon.
   const gap = 6;
   const slotW = Math.min(70, (w - 36 - gap * 4) / 5);
@@ -1331,6 +1358,7 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   const queued = Array.isArray(mine.pendingShots) ? mine.pendingShots.length : 0;
   const mismatch = netDiagnostics.desyncDisagreed;
   lines.push(`RENDERER ${pixiStatus} · N / F6 TO TOGGLE PROTOTYPE`);
+  if (pixiErrorMessage) lines.push(`PIXI ERROR ${pixiErrorMessage}`);
   lines.push(`PREDICTION ${netDiagnostics.mode} · local player predicted, room authoritative`);
   lines.push(`RECONCILIATION SDK rollback/replay · self prediction`);
   lines.push(`REMOTE BUFFER SDK interpolation · no second custom buffer`);
