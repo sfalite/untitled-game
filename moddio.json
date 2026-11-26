@@ -5,5 +5,8 @@
   "server": "server.ts",
   "client": "client/index.html",
   "products": [],
-  "game": "untitled-game-b8a1fb"
+  "game": "untitled-game-b8a1fb",
+  "menu": true,
+  "playersPerRoom": 32,
+  "tickRate": 20
 }
