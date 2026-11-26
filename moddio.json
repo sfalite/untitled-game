@@ -1,6 +1,6 @@
 {
-  "name": "blank",
-  "title": "Blank",
+  "name": "chaos-city",
+  "title": "Chaos City.io",
   "sim": "sim.ts",
   "server": "server.ts",
   "client": "client/index.html",

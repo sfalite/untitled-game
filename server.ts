@@ -1,4 +1,6 @@
-/** No server hooks yet: saves and hidden events go here (llms.txt, server.ts). */
 import { defineServer } from '@moddio/server';
 
-export default defineServer({});
+export default defineServer({
+  async join(_player, _room) {},
+  async leave(_player, _room) {}
+});
