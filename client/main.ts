@@ -42,6 +42,10 @@ let localInstantMuzzleUntil = 0;
 let localInstantMuzzleWeapon = -1;
 let latestLocalAimAngle = 0;
 let activePlayerId = '';
+let debugOverlayEnabled = false;
+let lastLocalShotTokenRequested = 0;
+let lastLocalShotAt = 0;
+let lastLocalShotWeapon = -1;
 const observedShotSeqByPlayer = new Map<string, number>();
 const PLAYER_COLORS = ['#55d6ff', '#ff6b6b', '#ffd166', '#c792ea', '#6ee7a8', '#ff9f43'];
 
@@ -603,6 +607,9 @@ function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: n
 function resetLocalShotState(): void {
   localShotToken = 0;
   localShotTokenBaselineReady = false;
+  lastLocalShotTokenRequested = 0;
+  lastLocalShotAt = 0;
+  lastLocalShotWeapon = -1;
   localNextShotAtByWeapon.fill(0);
   localFireWasDown = false;
   localFireHeldSince = 0;
@@ -630,6 +637,9 @@ function registerLocalShotInput(fireDown: boolean, now: number, dropDown = false
   // is the only projectile representation. Audio and muzzle flash still respond immediately.
   localShotToken = (localShotToken + 1) >>> 0;
   if (localShotToken === 0) localShotToken = 1;
+  lastLocalShotTokenRequested = localShotToken;
+  lastLocalShotAt = now;
+  lastLocalShotWeapon = weaponId;
   localInstantMuzzleWeapon = weaponId;
   localInstantMuzzleUntil = now + 110;
   playShotSound(weaponId);
@@ -757,6 +767,7 @@ function drawGame(state: any, self: any, playerId: string): void {
   }
   ctx.restore();
   drawHud(ctx, mine, s);
+  drawMultiplayerDiagnostics(ctx, mine, s);
 }
 function weaponSlotAt(screenX: number, screenY: number): number {
   const w = view.width, h = view.height;
@@ -781,6 +792,35 @@ let displayedPingMs: number | null = null;
 let fpsFrameCount = 0;
 let fpsWindowStarted = performance.now();
 let nextMetricsSampleAt = 0;
+const pingSamples: number[] = [];
+type NetDiagnostics = {
+  mode: string;
+  confirmedFrame: number | null;
+  predictedFrame: number | null;
+  leadMs: number | null;
+  marginMs: number | null;
+  desyncAgreed: number | null;
+  desyncDisagreed: number | null;
+  confirmedHash: string;
+  localDriftPx: number | null;
+  lastSampleAt: number;
+};
+let netDiagnostics: NetDiagnostics = {
+  mode: 'waiting', confirmedFrame: null, predictedFrame: null, leadMs: null, marginMs: null,
+  desyncAgreed: null, desyncDisagreed: null, confirmedHash: '--', localDriftPx: null, lastSampleAt: 0,
+};
+function finiteMetric(value: any): number | null {
+  const n = Number(value);
+  return value !== null && value !== undefined && Number.isFinite(n) ? n : null;
+}
+function firstNumeric(source: any, keys: string[]): number | null {
+  if (!source || typeof source !== 'object') return null;
+  for (const key of keys) {
+    const v = finiteMetric(source[key]);
+    if (v !== null) return v;
+  }
+  return null;
+}
 function sampleHudMetrics(game: any): void {
   const now = performance.now();
   fpsFrameCount++;
@@ -790,16 +830,50 @@ function sampleHudMetrics(game: any): void {
     fpsFrameCount = 0;
     fpsWindowStarted = now;
   }
-  if (now >= nextMetricsSampleAt) {
-    nextMetricsSampleAt = now + 500;
-    try {
-      const ping = game?.inspect?.()?.report?.pingMs;
-      displayedPingMs = typeof ping === 'number' && Number.isFinite(ping) && ping >= 0
-        ? Math.round(ping)
-        : null;
-    } catch {
-      displayedPingMs = null;
+  if (now < nextMetricsSampleAt) return;
+  nextMetricsSampleAt = now + 500;
+  try {
+    // Read the SDK snapshot at 2 Hz, not every render frame, to keep diagnostics cheap.
+    const inspect: any = game?.inspect?.();
+    const report = inspect?.report || {};
+    const ping = finiteMetric(report.pingMs);
+    displayedPingMs = ping !== null && ping >= 0 ? Math.round(ping) : null;
+    if (displayedPingMs !== null) {
+      pingSamples.push(displayedPingMs);
+      while (pingSamples.length > 20) pingSamples.shift();
     }
+    const confirmedFrame = finiteMetric(inspect?.confirmed?.frame);
+    const predictedFrame = finiteMetric(inspect?.predicted?.frame);
+    const desync = report.desync || {};
+    const agreed = firstNumeric(desync, ['agreed', 'agree', 'ok', 'matches']);
+    const disagreed = firstNumeric(desync, ['disagreed', 'disagree', 'mismatch', 'mismatches', 'errors']);
+    let confirmedHash = '--';
+    try {
+      if (confirmedFrame !== null && typeof inspect?.hashAt === 'function') {
+        const hash = inspect.hashAt(confirmedFrame);
+        if (hash !== null && hash !== undefined) confirmedHash = String(hash).slice(0, 12);
+      }
+    } catch {}
+    let localDriftPx: number | null = null;
+    const confirmedPlayer = inspect?.confirmed?.state?.players?.[activePlayerId];
+    const predictedPlayer = inspect?.predicted?.state?.players?.[activePlayerId];
+    if (confirmedPlayer && predictedPlayer
+      && Number.isFinite(Number(confirmedPlayer.x)) && Number.isFinite(Number(confirmedPlayer.y))
+      && Number.isFinite(Number(predictedPlayer.x)) && Number.isFinite(Number(predictedPlayer.y))) {
+      const dx = Number(predictedPlayer.x) - Number(confirmedPlayer.x);
+      const dy = Number(predictedPlayer.y) - Number(confirmedPlayer.y);
+      localDriftPx = Math.sqrt(dx * dx + dy * dy);
+    }
+    netDiagnostics = {
+      mode: String(inspect?.mode || 'unknown'),
+      confirmedFrame, predictedFrame,
+      leadMs: finiteMetric(report.leadMs), marginMs: finiteMetric(report.marginMs),
+      desyncAgreed: agreed, desyncDisagreed: disagreed,
+      confirmedHash, localDriftPx, lastSampleAt: now,
+    };
+  } catch {
+    displayedPingMs = null;
+    netDiagnostics = { ...netDiagnostics, mode: 'inspect unavailable', lastSampleAt: now };
   }
 }
 
@@ -904,8 +978,8 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillText(`${Math.max(0, Math.round(mine.health))} / 100`, w / 2, hpY + 25);
 
   if (!keys.touch) {
-    ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 238, 24, 8);
-    ctx.fillStyle = '#f1f5f6'; ctx.font = '11px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP  ·  G DROP  ·  EMPTY SLOT: PUNCH', 24, h - 22, 216);
+    ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 292, 24, 8);
+    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · EMPTY SLOT: PUNCH · F3 DEBUG', 24, h - 22, 272);
   }
   const nearestWorldPickup = (state.pickups || []).some((pickup: any) => {
     const dx = pickup.x - mine.x, dy = pickup.y - mine.y;
@@ -932,6 +1006,55 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('PING / MS', metricsX + 9, 58);
   ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'right'; ctx.fillText(displayedPingMs == null ? '--' : String(displayedPingMs), metricsX + metricsW - 9, 58);
   drawMiniMap(ctx, mine);
+}
+
+function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
+  if (!debugOverlayEnabled) return;
+  const screenW = view.width, screenH = view.height;
+  const panelW = Math.min(370, screenW - 24);
+  const lineH = screenH < 480 ? 13 : 15;
+  const lines: string[] = [];
+  const confirmed = netDiagnostics.confirmedFrame;
+  const predicted = netDiagnostics.predictedFrame;
+  const frameGap = confirmed !== null && predicted !== null ? predicted - confirmed : null;
+  const avgPing = pingSamples.length ? Math.round(pingSamples.reduce((a, b) => a + b, 0) / pingSamples.length) : null;
+  const maxPing = pingSamples.length ? Math.max(...pingSamples) : null;
+  const aimDegrees = ((Number(mine.aimAngle) || 0) * 180 / Math.PI + 360) % 360;
+  const inventory = Array.isArray(mine.inventory) ? mine.inventory : [];
+  const inventoryLabel = inventory.map((id: any) => typeof id === 'number' && id >= 0 && id < WEAPON_NAMES.length ? WEAPON_NAMES[id] : '--').join(' | ');
+  const confirmedToken = finiteMetric(mine.lastFiredClientShotToken);
+  const resolvedToken = finiteMetric(mine.lastResolvedClientShotToken);
+  const queued = Array.isArray(mine.pendingShots) ? mine.pendingShots.length : 0;
+  const mismatch = netDiagnostics.desyncDisagreed;
+  lines.push(`SDK PREDICTION: ${netDiagnostics.mode} · local prediction + server authority`);
+  lines.push(`FPS ${displayedFps || '--'} · PING ${displayedPingMs == null ? '--' : displayedPingMs + ' ms'} · AVG/MAX ${avgPing == null ? '--' : avgPing}/${maxPing == null ? '--' : maxPing} ms`);
+  lines.push(`FRAMES confirmed ${confirmed ?? '--'} · predicted ${predicted ?? '--'} · gap ${frameGap ?? '--'}`);
+  lines.push(`INPUT LEAD ${netDiagnostics.leadMs == null ? '--' : Math.round(netDiagnostics.leadMs) + ' ms'} · MARGIN ${netDiagnostics.marginMs == null ? '--' : Math.round(netDiagnostics.marginMs) + ' ms'}`);
+  lines.push(`DESYNC agreed ${netDiagnostics.desyncAgreed ?? '--'} · disagreed ${mismatch ?? '--'} · hash ${netDiagnostics.confirmedHash}`);
+  lines.push(`LOCAL (${Math.round(mine.x)}, ${Math.round(mine.y)}) · aim ${Math.round(aimDegrees)}° · HP ${Math.round(mine.health ?? 0)}`);
+  lines.push(`DRIFT predicted-confirmed ${netDiagnostics.localDriftPx == null ? '--' : netDiagnostics.localDriftPx.toFixed(1) + ' px'} · players ${Object.keys(state.players || {}).length}`);
+  lines.push(`ENTITIES bullets ${(state.bullets || []).length} · pickups ${(state.pickups || []).length} · particles ${(state.particles || []).length} · props ${(state.props || []).filter((p: any) => p.active).length}`);
+  lines.push(`SHOTS local token ${lastLocalShotTokenRequested || '--'} · fired ${confirmedToken ?? '--'} · resolved ${resolvedToken ?? '--'} · queue ${queued}`);
+  lines.push(`LAST LOCAL SHOT ${lastLocalShotWeapon >= 0 ? WEAPON_NAMES[lastLocalShotWeapon] : '--'} · ${lastLocalShotAt ? ((performance.now() - lastLocalShotAt) / 1000).toFixed(1) + 's ago' : '--'}`);
+  lines.push(`INVENTORY ${inventoryLabel || '--'}`);
+  const maxLines = Math.max(6, Math.floor((screenH - 120) / lineH));
+  const visibleLines = lines.slice(0, maxLines);
+  const panelH = 28 + visibleLines.length * lineH + 8;
+  const x = 12, y = Math.min(100, Math.max(12, screenH - panelH - 12));
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,13,18,.94)'; roundRect(ctx, x, y, panelW, panelH, 10);
+  ctx.strokeStyle = mismatch != null && mismatch > 0 ? '#ff6b67' : 'rgba(123,244,174,.72)';
+  ctx.lineWidth = 1.5; strokeRoundRect(ctx, x + 0.5, y + 0.5, panelW - 1, panelH - 1, 10);
+  ctx.textAlign = 'left'; ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 11px system-ui';
+  ctx.fillText('MULTIPLAYER DIAGNOSTICS  ·  F3 TO HIDE', x + 10, y + 17, panelW - 20);
+  ctx.font = screenH < 480 ? '9px ui-monospace, monospace' : '10px ui-monospace, monospace';
+  visibleLines.forEach((line, i) => {
+    const isWarn = (line.startsWith('DESYNC') && mismatch != null && mismatch > 0)
+      || (line.startsWith('DRIFT') && netDiagnostics.localDriftPx != null && netDiagnostics.localDriftPx > 60);
+    ctx.fillStyle = isWarn ? '#ffaaa2' : (i % 2 === 0 ? '#f0f5f3' : '#b8c9cd');
+    ctx.fillText(line, x + 10, y + 34 + i * lineH, panelW - 20);
+  });
+  ctx.restore();
 }
 
 // Menu-only snapshot: the scene is rendered once at half resolution and blurred behind the UI.
@@ -1252,6 +1375,8 @@ async function startWorker(): Promise<void> {
   // Reset the HUD sampling window after connecting so time spent in the menu does not skew FPS.
   displayedFps = 0;
   displayedPingMs = null;
+  pingSamples.length = 0;
+  netDiagnostics = { mode: 'sampling', confirmedFrame: null, predictedFrame: null, leadMs: null, marginMs: null, desyncAgreed: null, desyncDisagreed: null, confirmedHash: '--', localDriftPx: null, lastSampleAt: 0 };
   fpsFrameCount = 0;
   fpsWindowStarted = performance.now();
   nextMetricsSampleAt = 0;
@@ -1345,6 +1470,7 @@ function appLoop(): void {
     if (keys.pressed('mouse0')) handleMenuClick(keys.mouse.x, keys.mouse.y);
     if (keys.pressed('enter')) void joinSelected(false);
   } else if (mode === 'game') {
+    if (keys.pressed('f3')) debugOverlayEnabled = !debugOverlayEnabled;
     if (keys.pressed('m')) void enterMenu();
     else if (keys.pressed('mouse0')) {
       const slot = weaponSlotAt(keys.mouse.x, keys.mouse.y);
