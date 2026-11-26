@@ -50,11 +50,11 @@ const BUILDINGS: Rect[] = [
   {x:858,y:1240,w:170,h:180,color:'#c78b4a',style:0}, {x:1240,y:1240,w:170,h:180,color:'#8b9fa0',style:2},
   {x:1610,y:1240,w:120,h:180,color:'#d47b37',style:3},
 ];
-type Tree = { x: number; y: number; r: number }; // r is the circular trunk radius in world pixels (20px, 40px diameter).
+type Tree = { x: number; y: number; r: number }; // r is the trunk radius in world pixels (15px, 30px diameter).
 const TREES: Tree[] = [
-  {x:320,y:292,r:20},{x:704,y:292,r:20},{x:1092,y:292,r:20},{x:1476,y:292,r:20},
-  {x:320,y:664,r:20},{x:704,y:664,r:20},{x:1092,y:664,r:20},{x:1476,y:664,r:20},
-  {x:320,y:1048,r:20},{x:704,y:1048,r:20},{x:1092,y:1048,r:20},{x:1476,y:1048,r:20},
+  {x:320,y:292,r:15},{x:704,y:292,r:15},{x:1092,y:292,r:15},{x:1476,y:292,r:15},
+  {x:320,y:664,r:15},{x:704,y:664,r:15},{x:1092,y:664,r:15},{x:1476,y:664,r:15},
+  {x:320,y:1048,r:15},{x:704,y:1048,r:15},{x:1092,y:1048,r:15},{x:1476,y:1048,r:15},
 ];
 
 type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
@@ -63,6 +63,7 @@ type Player = {
   name: string; x: number; y: number; body: number; move: [number, number]; aimAngle: number;
   weapon: number; fire: boolean; smash: boolean; fireCooldown: number; smashCooldown: number;
   score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number; shotWeapon: number;
+  deathSeq: number; deathX: number; deathY: number;
 };
 type Bullet = { id: number; owner: string; x: number; y: number; vx: number; vy: number; damage: number; life: number; color: string };
 type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
@@ -235,7 +236,7 @@ function muzzlePosition(p: Player): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '5',
+  version: '7',
   tickRate: 20,
   maxPlayers: 32,
   physics: box2dPhysics,
@@ -273,6 +274,7 @@ export default defineSim({
       move: [0, 0], aimAngle: 0, weapon: 0, fire: false, smash: false,
       fireCooldown: 0, smashCooldown: 0, score: 0, health: 100, invulnerable: 45,
       color: ctx.int(6), muzzleFlash: 0, shotSeq: 0, shotWeapon: 0,
+      deathSeq: 0, deathX: spawn.x, deathY: spawn.y,
     };
   },
 
@@ -415,6 +417,10 @@ export default defineSim({
             targetBody.setLinearVelocity(pl.Vec2(velocity.x + b.vx * 0.035 / PPM, velocity.y + b.vy * 0.035 / PPM));
           }
           if (target.health <= 0) {
+            // Store the actual death location before moving the player to the respawn point.
+            target.deathX = target.x;
+            target.deathY = target.y;
+            target.deathSeq++;
             const spawn = openSpawn(ctx, state, id);
             target.x = spawn.x; target.y = spawn.y; target.health = 100;
             target.invulnerable = 55; target.score = Math.max(0, target.score - 15);

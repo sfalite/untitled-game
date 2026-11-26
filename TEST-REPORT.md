@@ -1,15 +1,14 @@
-# Chaos City.io — Update v4 verification report
+# Chaos City.io — Update v6 test report
 
-## Passed locally
+Static checks:
+- All 12 tree collision circles have radius 15 world pixels (30×30 diameter); tree art remains 128×128.
+- Removed the translucent atlas image overlay from road tiles.
+- Removed the floor2 road marking/crosswalk renderer and its draw call.
+- Confirmed the death scream asset exists and is referenced by a relative game asset path.
+- Death simulation state records `deathSeq`, `deathX`, and `deathY` before teleporting the player to the respawn point.
+- Client only plays a scream when it observes a new death sequence; playback is stereo-panned and attenuated by distance. Local self-death remains audible after respawn.
+- Simulation bundle version bumped to 7.
 
-- `tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM --skipLibCheck --strict false` passed for `sim.ts` and `client/main.ts` using temporary ambient declarations for modd.io imports.
-- Tree definitions use radius 20 px. Static tree colliders use `pl.Circle(20 / PPM)`, spawn clearance treats the trunk as a circle, and projectile collision uses circle distance against the same radius.
-- Removed the white outline circle drawn around the local player. The cursor reticle is unchanged.
-- Base floor tile art is cached once in an offscreen canvas and displayed as one contiguous image, avoiding independently scaled tile edges.
-- Automatic weapon audio is no longer looped. New `shotSeq` values trigger the correct one-shot sound using the `shotWeapon` captured in the deterministic simulation. Rifle/minigun samples are short trimmed transients; original versions are backed up.
-- Shotgun sample and firing-sound mapping were not changed.
-- ZIP file integrity and expected asset paths passed checks.
-
-## Not verified here
-
-The actual modd.io CLI/browser runtime was not run in this environment, so its official deterministic test, real Planck adapter behaviour, and sound playback policy still need confirmation with the installed SDK. Local TypeScript checking is not a substitute for `npx moddio test` or a multi-player browser test.
+Not performed:
+- Official `npx moddio test` (requires SDK dependencies).
+- Live browser multiplayer test on modd.io.

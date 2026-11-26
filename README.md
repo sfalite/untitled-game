@@ -38,3 +38,21 @@ npx moddio dev
 ```
 
 Check that only the tree trunks block movement, bullets hit the trunk circle, floor seams are absent at the current zoom and after resizing, the local-player ring is gone, and every rapid-fire shot produces a timely sound. Test at least two players and touch controls before publishing.
+
+
+## Update v5
+- Removed all road lane dashes and crosswalk markings; roads are now clean asphalt with no atlas overlay.
+- Reduced tree trunk collision to a 30x30 pixel circle (15 px radius); tree artwork remains 128x128.
+- Added the supplied `assets/audio/man_scream1.mp3` death sound. The simulation records each player's death location and sequence; clients play the sound with left/right panning and distance attenuation from that location.
+- Bumped the deterministic simulation version to 6.
+
+Run `npx moddio test` and test with two browser players through `npx moddio dev` before publishing. The official SDK check has not been run in this environment.
+
+
+## Update v6
+- Removed road lane markings, crosswalk markings, and the translucent atlas overlay over asphalt tiles.
+- Reduced tree trunk colliders to a 30×30 pixel circular area while retaining the 128×128 tree sprite.
+- Added positional playback of `assets/audio/man_scream1.mp3` at recorded player-death coordinates, with stereo panning and distance attenuation. The local player's own death scream remains audible after respawn.
+- Bumped the simulation version to 7.
+
+Before publishing, run `npx moddio test` and check two players in `npx moddio dev`. The official SDK tests have not been run in this environment.
