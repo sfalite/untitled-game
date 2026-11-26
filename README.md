@@ -129,3 +129,12 @@ Test in the modd.io browser after running `npx moddio test` and `npx moddio dev`
 - TypeScript no-emit compilation and a local simulation smoke test are run for this package build. This does not replace `npx moddio test` or live two-player testing against the actual modd.io SDK and Planck adapter.
 
 - Follow-up muzzle audit: set the M134 forward offset to 24px (the front of the drawn barrel cluster) so its spark and projectile start at the visible muzzle, not inside the barrel.
+
+
+## Update v15 — remote-player teleport correction and prop health
+
+- Changed the simulation from `predict: 'world'` to `predict: 'self'`. The modd.io SDK documents that whole-world prediction can make remote physics players snap when corrections arrive; in self mode, the locally controlled player remains predicted while remote players are shown from the SDK's interpolated authoritative frames.
+- Kept projectile positions strictly authoritative. Rendering never moves a bullet back toward an owner's current muzzle, which would bend its trajectory as the owner moved.
+- Reduced all non-car prop HP to 20. Parked cars remain at 200 HP. Client health-bar maximums use the same values so ratios and damage bars remain consistent.
+- Simulation version bumped to 17.
+- Local TypeScript/source checks are included in this update's test report. Official `npx moddio test` and live-browser multiplayer validation remain necessary.

@@ -312,7 +312,7 @@ function makePropBody(world: any, prop: Prop): number {
   body.setAngularDamping(4.5);
   return bodyId(world, body);
 }
-function propMaxHealth(kind: PropKind): number { return kind === 'car' ? 200 : 50; }
+function propMaxHealth(kind: PropKind): number { return kind === 'car' ? 200 : 20; }
 function propPoints(kind: PropKind): number { return kind === 'car' ? 35 : kind === 'bench' ? 20 : 10; }
 function propRadius(kind: PropKind): number {
   const cfg = propPhysics(kind);
@@ -462,13 +462,13 @@ function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '16',
+  version: '17',
   tickRate: 20,
   maxPlayers: 32,
-  // Predict the complete shared world so each rendered player and their bullets come from
-  // the same simulation clock. This avoids visually re-attaching confirmed bullets to a
-  // different interpolated/predicted muzzle on each client.
-  predict: 'world',
+  // Predict only the local player. The SDK interpolates remote players from authoritative
+  // room frames; world prediction can visibly snap remote physics bodies when Planck worlds
+  // are corrected after rollback. Bullets stay authoritative and are never reattached to a muzzle.
+  predict: 'self',
   physics: box2dPhysics,
   input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', buttons: { flags: ['fire', 'smash', 'pickup', 'drop'] } },
 

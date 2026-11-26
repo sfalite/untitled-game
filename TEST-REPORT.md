@@ -115,3 +115,12 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3`,
 - Official SDK checks and an actual networked two-player browser session are not available from this editing environment; the changed prediction mode's production CPU cost and remaining latency behaviour must be tested with the official CLI.
 
 - Follow-up visual-anchor check updated the M134 muzzle to 24px forward (front of the procedural barrel cluster); all other weapon muzzle offsets remain matched to their local drawing transforms.
+
+
+## Update v15 — teleport and durability adjustment
+
+- Updated simulation prediction mode to `self`, preserving local-player prediction while using the SDK's normal remote-player interpolation instead of whole-world prediction. This targets the known visual snap risk documented for `predict: 'world'` physics games.
+- Verified the local client does not reposition authoritative bullets around a moving shooter's current muzzle.
+- Verified `propMaxHealth` returns 20 for crate/bin/hydrant/cone/bench and 200 for cars; client health-bar maximums match.
+- Simulation version bumped to 17.
+- TypeScript no-emit compilation and package integrity checks were run locally. The actual modd.io runtime was unavailable, so official SDK tests and a live multiplayer session were not run here.
