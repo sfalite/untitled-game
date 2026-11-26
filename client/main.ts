@@ -294,7 +294,7 @@ function drawTreesLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:numb
   for (const t of TREES) {
     if (t.x + TREE_HALF < visible.x || t.x - TREE_HALF > visible.x + visible.w || t.y + TREE_HALF < visible.y || t.y - TREE_HALF > visible.y + visible.h) continue;
     if (imageReady(treeSprite)) {
-      // Display the uploaded tree sprite at its original 128x128 dimensions; the sim uses the same-sized collider.
+      // Keep the 128x128 canopy art; only the small 20x20 trunk collider blocks movement.
       ctx.drawImage(treeSprite, t.x - TREE_HALF, t.y - TREE_HALF, TREE_SIZE, TREE_SIZE);
     } else {
       ctx.fillStyle = '#2ba966'; ctx.beginPath(); ctx.arc(t.x, t.y, TREE_HALF - 10, 0, Math.PI * 2); ctx.fill();
@@ -405,6 +405,12 @@ function drawGame(state: any, self: any, playerId: string): void {
   const mine = s.players[playerId];
   updateWeaponAudio(mine);
   updateDeathAudio(s.players, mine, playerId);
+  // In self-prediction mode the local player is drawn a little ahead of the confirmed room state.
+  // Nudge only the first one or two frames of our own bullets by that same prediction delta so the
+  // projectile appears attached to the visible muzzle. Damage and actual trajectories remain server-simulated.
+  const confirmedMine = state?.players?.[playerId];
+  const localBulletDeltaX = confirmedMine && Number.isFinite(confirmedMine.x) ? mine.x - confirmedMine.x : 0;
+  const localBulletDeltaY = confirmedMine && Number.isFinite(confirmedMine.y) ? mine.y - confirmedMine.y : 0;
   const fit = Math.min(view.width / 960, view.height / 640);
   const zoom = Math.max(0.68, Math.min(1.35, fit * 1.2));
   const visibleW = view.width / zoom;
@@ -426,9 +432,12 @@ function drawGame(state: any, self: any, playerId: string): void {
   drawWallsLayer(ctx, visible);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const b of s.bullets || []) {
+    const localRecentShot = b.owner === playerId && Number(b.age || 0) <= 1;
+    const bulletX = b.x + (localRecentShot ? localBulletDeltaX : 0);
+    const bulletY = b.y + (localRecentShot ? localBulletDeltaY : 0);
     ctx.fillStyle = b.color || '#ffd16a';
-    ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(255,240,170,.32)'; ctx.beginPath(); ctx.arc(b.x, b.y, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(bulletX, bulletY, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,240,170,.32)'; ctx.beginPath(); ctx.arc(bulletX, bulletY, 8, 0, Math.PI * 2); ctx.fill();
   }
   for (const p of s.particles || []) {
     const alpha = Math.max(0.08, Math.min(1, p.life / 25));
@@ -489,15 +498,99 @@ function weaponSlotAt(screenX: number, screenY: number): number {
   return -1;
 }
 
+// Client-side render FPS and the ping reported by modd.io's room connection.
+// These are sampled at a low rate so the HUD does not add meaningful work to each frame.
+let displayedFps = 0;
+let displayedPingMs: number | null = null;
+let fpsFrameCount = 0;
+let fpsWindowStarted = performance.now();
+let nextMetricsSampleAt = 0;
+function sampleHudMetrics(game: any): void {
+  const now = performance.now();
+  fpsFrameCount++;
+  const elapsed = now - fpsWindowStarted;
+  if (elapsed >= 500) {
+    displayedFps = Math.round(fpsFrameCount * 1000 / Math.max(1, elapsed));
+    fpsFrameCount = 0;
+    fpsWindowStarted = now;
+  }
+  if (now >= nextMetricsSampleAt) {
+    nextMetricsSampleAt = now + 500;
+    try {
+      const ping = game?.inspect?.()?.report?.pingMs;
+      displayedPingMs = typeof ping === 'number' && Number.isFinite(ping) && ping >= 0
+        ? Math.round(ping)
+        : null;
+    } catch {
+      displayedPingMs = null;
+    }
+  }
+}
+
+function drawMiniMap(ctx: CanvasRenderingContext2D, mine: any): void {
+  // Full-city overview anchored to the lower-right. Only the local player's marker is shown.
+  const w = view.width, h = view.height;
+  const mapW = keys.touch
+    ? Math.min(112, Math.max(84, w * 0.24))
+    : Math.min(156, Math.max(104, w * 0.235));
+  const mapH = mapW * WORLD_H / WORLD_W;
+  const headerH = 20;
+  const panelH = mapH + headerH + 12;
+  // Outer panel is mapW + 14 wide; account for that width so its right edge has a 12px margin.
+  const x = w - mapW - 26;
+  // The touch controls occupy the lower-right edge, so keep the map in that corner's
+  // lower area but just above the control strip, instead of jumping to the top of the screen.
+  const touchControlReserve = keys.touch ? (w < 600 ? 104 : 80) : 0;
+  const y = h - panelH - 12 - touchControlReserve;
+  const mapX = x + 7;
+  const mapY = y + headerH + 3;
+  const sx = mapW / WORLD_W;
+  const sy = mapH / WORLD_H;
+
+  ctx.fillStyle = 'rgba(12,24,29,.92)'; roundRect(ctx, x, y, mapW + 14, panelH, 10);
+  ctx.fillStyle = '#ddf4e5'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
+  ctx.fillText('CITY MAP · YOU', x + 9, y + 14);
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(mapX, mapY, mapW, mapH, 5); ctx.clip();
+  ctx.fillStyle = '#7caf78'; ctx.fillRect(mapX, mapY, mapW, mapH);
+
+  // Reproduce the road grid at overview scale without lane markings.
+  ctx.fillStyle = '#484b4d';
+  for (const col of ROAD_COLS) ctx.fillRect(mapX + col * TILE * sx, mapY, TILE * sx, mapH);
+  for (const row of ROAD_ROWS) ctx.fillRect(mapX, mapY + row * TILE * sy, mapW, TILE * sy);
+  // Keep the overview intentionally clean: no lane markings, tile borders or grid lines.
+
+  for (const building of BUILDINGS) {
+    ctx.fillStyle = building.color;
+    ctx.fillRect(mapX + building.x * sx, mapY + building.y * sy, building.w * sx, building.h * sy);
+  }
+  // Static tree crowns are terrain landmarks, not player markers.
+  ctx.fillStyle = '#269d60';
+  for (const tree of TREES) {
+    ctx.beginPath(); ctx.arc(mapX + tree.x * sx, mapY + tree.y * sy, Math.max(1.6, 9 * sx), 0, Math.PI * 2); ctx.fill();
+  }
+  // Only the local player is marked on the minimap.
+  const px = mapX + Math.max(0, Math.min(WORLD_W, mine.x)) * sx;
+  const py = mapY + Math.max(0, Math.min(WORLD_H, mine.y)) * sy;
+  ctx.fillStyle = 'rgba(13,25,30,.7)'; ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(px, py, 3.4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#39ed84'; ctx.beginPath(); ctx.arc(px, py, 1.6, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(231,255,239,.6)'; ctx.lineWidth = 1;
+  strokeRoundRect(ctx, mapX, mapY, mapW, mapH, 5);
+}
+
 function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   const w = view.width, h = view.height;
-  // Score panel
-  const boardW = Math.min(160, w > 540 ? 160 : 112);
+  // Keep the leaderboard at top-right and place performance/network stats immediately beside it.
+  const boardW = Math.min(160, w > 540 ? 160 : Math.max(88, Math.min(112, w * 0.31)));
   const boardX = w - boardW - 14;
-  const scoreW = Math.min(208, w - boardW - 40);
+  const metricsW = w > 700 ? 112 : Math.max(82, Math.min(98, w * 0.26));
+  const metricsX = boardX - metricsW - 8;
+  const scoreW = Math.min(208, Math.max(80, metricsX - 26));
   ctx.fillStyle = 'rgba(14,25,31,.88)'; roundRect(ctx, 14, 14, scoreW, 72, 12);
-  ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 17px system-ui'; ctx.textAlign = 'left'; ctx.fillText('CHAOS CITY.IO', 27, 37);
-  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 15px system-ui'; ctx.fillText(`Score  ${mine.score}`, 27, 60);
+  ctx.fillStyle = '#9ff4bb'; ctx.font = w < 440 ? 'bold 12px system-ui' : 'bold 17px system-ui'; ctx.textAlign = 'left'; ctx.fillText(w < 440 ? 'CHAOS CITY' : 'CHAOS CITY.IO', 27, 37);
+  ctx.fillStyle = '#ffffff'; ctx.font = w < 440 ? 'bold 12px system-ui' : 'bold 15px system-ui'; ctx.fillText(`Score  ${mine.score}`, 27, 60);
   ctx.fillStyle = '#c5d3d7'; ctx.font = '11px system-ui'; ctx.fillText(`${Object.keys(state.players || {}).length} PLAYER(S)`, 27, 77);
 
   // Inventory: four selectable weapon slots, directly above the health bar.
@@ -539,6 +632,14 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#ffd166'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'left'; ctx.fillText('TOP CHAOS', boardX + 10, 34);
   ctx.fillStyle = '#ffffff'; ctx.font = '11px system-ui';
   top.slice(0, w > 540 ? 4 : 3).forEach(([id, p]: any, i) => ctx.fillText(`${i + 1}. ${String(p.name || 'Player').slice(0, w > 540 ? 11 : 7)} ${p.score}`, boardX + 10, 53 + i * 17));
+
+  // FPS is measured locally; MS uses the SDK's actual room round-trip ping (not frame lead).
+  ctx.fillStyle = 'rgba(14,25,31,.88)'; roundRect(ctx, metricsX, 14, metricsW, 72, 11);
+  ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('FPS', metricsX + 9, 34);
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'right'; ctx.fillText(displayedFps > 0 ? String(displayedFps) : '--', metricsX + metricsW - 9, 34);
+  ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('PING / MS', metricsX + 9, 58);
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'right'; ctx.fillText(displayedPingMs == null ? '--' : String(displayedPingMs), metricsX + metricsW - 9, 58);
+  drawMiniMap(ctx, mine);
 }
 
 // Main menu and region/server picker; all room data comes from modd.io's pageRooms().
@@ -737,9 +838,16 @@ async function startWorker(): Promise<void> {
     },
   });
   currentGame = game;
+  // Reset the HUD sampling window after connecting so time spent in the menu does not skew FPS.
+  displayedFps = 0;
+  displayedPingMs = null;
+  fpsFrameCount = 0;
+  fpsWindowStarted = performance.now();
+  nextMetricsSampleAt = 0;
   mode = 'game';
   game.onFrame(({ state, self }: any) => {
     if (mode !== 'game') return;
+    sampleHudMetrics(game);
     drawGame(state, self, game.player);
   });
 }
