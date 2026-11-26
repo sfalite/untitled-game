@@ -1,17 +1,21 @@
 import { defineSim } from '@moddio/sim';
+import { planck, pl } from '@moddio/sim/planck';
 
-// Chaos City.io — deterministic multiplayer simulation for the modd.io SDK.
+// Chaos City.io — deterministic Box2D-style physics through modd.io's Planck adapter.
+// Game coordinates are pixels; physics coordinates are metres (32 px = 1 m).
 const TILE = 64;
 const COLS = 28;
 const ROWS = 24;
 const W = COLS * TILE;
 const H = ROWS * TILE;
-const PLAYER_R = 14;
-const MOVE_SPEED = 4.7;
+const PPM = 32;
+const PLAYER_R = 20;
+const PLAYER_SPAWN_R = 28;
+const MOVE_SPEED = 4.7; // pixels per simulation tick
 const SMASH_RANGE = 60;
 const SMASH_COOLDOWN = 12;
+const MAX_PARTICLES = 180;
 
-export type WeaponIndex = 0 | 1 | 2 | 3;
 interface WeaponRule {
   damage: number;
   cooldown: number;
@@ -21,14 +25,16 @@ interface WeaponRule {
   pellets: number;
   color: string;
 }
-
-// These are game-balance values only; all weapons are fictionalised gameplay items.
 const WEAPONS: WeaponRule[] = [
   { damage: 22, cooldown: 7, speed: 18, life: 36, spread: 0.045, pellets: 1, color: '#ffd16a' },
   { damage: 9, cooldown: 3, speed: 18, life: 36, spread: 0.065, pellets: 1, color: '#ffb347' },
   { damage: 6, cooldown: 3, speed: 19, life: 36, spread: 0.11, pellets: 1, color: '#ff8f53' },
   { damage: 8, cooldown: 12, speed: 15, life: 28, spread: 0.25, pellets: 5, color: '#fff0b0' },
 ];
+
+// Planck keeps contact/broad-phase history, so rebuild its canonical world periodically.
+const box2dPhysics: any = planck({ gravity: { x: 0, y: 0 } });
+box2dPhysics.canonicalEvery = 100;
 
 type Rect = { x: number; y: number; w: number; h: number; color: string; style: number };
 const BUILDINGS: Rect[] = [
@@ -45,66 +51,25 @@ const BUILDINGS: Rect[] = [
   {x:858,y:1240,w:170,h:180,color:'#c78b4a',style:0}, {x:1240,y:1240,w:170,h:180,color:'#8b9fa0',style:2},
   {x:1610,y:1240,w:120,h:180,color:'#d47b37',style:3},
 ];
-
-// The tree positions are the shared gameplay counterpart of the renderer's trees layer.
-const TREES: Array<{x:number;y:number;r:number}> = [
+type Tree = { x: number; y: number; r: number };
+const TREES: Tree[] = [
   {x:288,y:292,r:23},{x:670,y:292,r:23},{x:1060,y:292,r:23},{x:1441,y:292,r:23},{x:1760,y:292,r:23},
   {x:288,y:664,r:23},{x:670,y:664,r:23},{x:1060,y:664,r:23},{x:1441,y:664,r:23},{x:1760,y:664,r:23},
   {x:288,y:1048,r:23},{x:670,y:1048,r:23},{x:1060,y:1048,r:23},{x:1441,y:1048,r:23},{x:1760,y:1048,r:23},
 ];
 
-function circleHitsRect(x: number, y: number, r: number, b: Rect): boolean {
-  const cx = Math.max(b.x, Math.min(x, b.x + b.w));
-  const cy = Math.max(b.y, Math.min(y, b.y + b.h));
-  const dx = x - cx;
-  const dy = y - cy;
-  return dx * dx + dy * dy < r * r;
-}
-function blocked(x: number, y: number): boolean {
-  if (BUILDINGS.some((b) => circleHitsRect(x, y, PLAYER_R, b))) return true;
-  return TREES.some((t) => {
-    const dx = x - t.x;
-    const dy = y - t.y;
-    const rr = PLAYER_R + t.r * 0.7;
-    return dx * dx + dy * dy < rr * rr;
-  });
-}
-function openSpawn(ctx: any): {x:number;y:number} {
-  for (let tries = 0; tries < 80; tries++) {
-    const x = 40 + ctx.rng() * (W - 80);
-    const y = 40 + ctx.rng() * (H - 80);
-    if (!blocked(x, y)) return { x, y };
-  }
-  return { x: 390, y: 390 };
-}
-
-type Player = {
-  name: string;
-  x: number;
-  y: number;
-  move: [number, number];
-  angle: number;
-  weapon: number;
-  fire: boolean;
-  smash: boolean;
-  fireCooldown: number;
-  smashCooldown: number;
-  score: number;
-  health: number;
-  invulnerable: number;
-  color: number;
-};
 type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
-type Prop = { id:number; x:number; y:number; kind:PropKind; active:boolean; respawnAt:number };
-type Bullet = { id:number; owner:string; x:number; y:number; vx:number; vy:number; damage:number; life:number; color:string };
-type Particle = { id:number; x:number; y:number; vx:number; vy:number; life:number; size:number; color:string; rotation:number; spin:number };
+type Prop = { id: number; x: number; y: number; kind: PropKind; active: boolean; respawnAt: number; body: number; angle: number };
+type Player = {
+  name: string; x: number; y: number; body: number; move: [number, number]; angle: number;
+  weapon: number; fire: boolean; smash: boolean; fireCooldown: number; smashCooldown: number;
+  score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number;
+};
+type Bullet = { id: number; owner: string; x: number; y: number; vx: number; vy: number; damage: number; life: number; color: string };
+type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
 type State = {
-  players: Record<string, Player>;
-  props: Prop[];
-  bullets: Bullet[];
-  particles: Particle[];
-  nextBulletId: number;
-  nextParticleId: number;
+  players: Record<string, Player>; props: Prop[]; bullets: Bullet[]; particles: Particle[];
+  nextBulletId: number; nextParticleId: number;
 };
 
 const PROP_SEEDS: Array<{x:number;y:number;kind:PropKind}> = [
@@ -117,62 +82,181 @@ const PROP_SEEDS: Array<{x:number;y:number;kind:PropKind}> = [
   {x:624,y:1510,kind:'bin'},{x:1000,y:1510,kind:'hydrant'},{x:1384,y:1510,kind:'bench'},
   {x:870,y:350,kind:'crate'},{x:900,y:750,kind:'bin'},{x:870,y:1120,kind:'cone'},
 ];
-function propPoints(kind: PropKind): number { return kind === 'car' ? 35 : kind === 'bench' ? 20 : 10; }
-function propRadius(kind: PropKind): number { return kind === 'car' ? 29 : kind === 'bench' ? 24 : 17; }
 
-function addParticles(state: State, ctx: any, x: number, y: number, kind: PropKind, count = 10): void {
-  let colors: string[];
-  if (kind === 'car') colors = ['#e66a25','#454c52','#9dcbd2','#c0cbd0'];
-  else if (kind === 'bench' || kind === 'crate') colors = ['#b77b43','#dba05f','#80512f','#e6b975'];
-  else if (kind === 'bin') colors = ['#299c6f','#45ce8b','#d6e3cf'];
-  else if (kind === 'hydrant' || kind === 'cone') colors = ['#f17b31','#d95127','#ffe0a2'];
-  else colors = ['#d3d6d2','#899a9c','#e7c58b'];
-  for (let i = 0; i < count; i++) {
-    const a = ctx.rng() * Math.PI * 2;
-    const speed = 1.2 + ctx.rng() * 4.1;
-    state.particles.push({
-      id: state.nextParticleId++, x, y,
-      vx: Math.cos(a) * speed, vy: Math.sin(a) * speed - 1.5,
-      life: 18 + ctx.int(24), size: 3 + ctx.int(6),
-      color: colors[ctx.int(colors.length)], rotation: ctx.rng() * 6.28,
-      spin: (ctx.rng() - 0.5) * 0.34,
+function circleHitsRect(x: number, y: number, r: number, b: Rect): boolean {
+  const cx = Math.max(b.x, Math.min(x, b.x + b.w));
+  const cy = Math.max(b.y, Math.min(y, b.y + b.h));
+  const dx = x - cx, dy = y - cy;
+  return dx * dx + dy * dy < r * r;
+}
+function blocked(x: number, y: number): boolean {
+  if (BUILDINGS.some((b) => circleHitsRect(x, y, PLAYER_SPAWN_R, b))) return true;
+  return TREES.some((t) => {
+    const dx = x - t.x, dy = y - t.y, rr = PLAYER_SPAWN_R + t.r + 2;
+    return dx * dx + dy * dy < rr * rr;
+  });
+}
+function openSpawn(ctx: any, state?: any, excludedPlayer = ''): {x:number;y:number} {
+  for (let tries = 0; tries < 100; tries++) {
+    const x = 40 + ctx.rng() * (W - 80), y = 40 + ctx.rng() * (H - 80);
+    if (blocked(x, y)) continue;
+    const overlapsProp = (state?.props || []).some((prop: any) => {
+      if (!prop.active) return false;
+      const dx = x - prop.x, dy = y - prop.y, r = PLAYER_SPAWN_R + propRadius(prop.kind) + 5;
+      return dx * dx + dy * dy < r * r;
     });
+    if (overlapsProp) continue;
+    const overlapsPlayer = Object.entries(state?.players || {}).some(([id, p]: [string, any]) => {
+      if (id === excludedPlayer) return false;
+      const dx = x - p.x, dy = y - p.y;
+      return dx * dx + dy * dy < 60 * 60;
+    });
+    if (!overlapsPlayer) return { x, y };
+  }
+  return { x: 390, y: 390 };
+}
+function bodyFromId(world: any, id: number): any {
+  if (id < 0) return null;
+  return world.bodyOf(id);
+}
+function destroyBody(ctx: any, id: number): void {
+  if (id < 0) return;
+  const world = ctx.physics;
+  const body = bodyFromId(world, id);
+  if (body) world.destroyBody(body);
+}
+function bodyId(world: any, body: any): number { return world.idOf(body); }
+function makeStaticBox(world: any, x: number, y: number, halfW: number, halfH: number, friction = 0.85): number {
+  const body = world.createBody({ type: 'static', position: pl.Vec2(x / PPM, y / PPM) });
+  body.createFixture(pl.Box(halfW / PPM, halfH / PPM), { density: 0, friction, restitution: 0.03 });
+  return bodyId(world, body);
+}
+function makeMapPhysics(world: any): void {
+  for (const b of BUILDINGS) makeStaticBox(world, b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0.9);
+  for (const t of TREES) {
+    const body = world.createBody({ type: 'static', position: pl.Vec2(t.x / PPM, t.y / PPM) });
+    body.createFixture(pl.Circle((t.r + 2) / PPM), { density: 0, friction: 0.9, restitution: 0.02 });
+  }
+  // Invisible Box2D walls keep bodies inside the city bounds.
+  makeStaticBox(world, -20, H / 2, 20, H / 2 + 30, 0.9);
+  makeStaticBox(world, W + 20, H / 2, 20, H / 2 + 30, 0.9);
+  makeStaticBox(world, W / 2, -20, W / 2 + 30, 20, 0.9);
+  makeStaticBox(world, W / 2, H + 20, W / 2 + 30, 20, 0.9);
+}
+function makePlayerBody(world: any, x: number, y: number): number {
+  // Match the player's original 43×35 sprite with an oriented Box2D rectangle.
+  const body = world.createBody({ type: 'dynamic', position: pl.Vec2(x / PPM, y / PPM), angle: Math.PI / 2 });
+  body.createFixture(pl.Box(21.5 / PPM, 17.5 / PPM), { density: 1.0, friction: 0.42, restitution: 0.04 });
+  body.setFixedRotation(true);
+  body.setLinearDamping(0.15);
+  body.setAngularDamping(12);
+  return bodyId(world, body);
+}
+function propPhysics(kind: PropKind): { hx:number;hy:number;density:number;friction:number;bounce:number;circle?:boolean } {
+  if (kind === 'car') return {hx:29,hy:15,density:2.4,friction:0.82,bounce:0.03};
+  if (kind === 'bench') return {hx:19,hy:8,density:0.8,friction:0.9,bounce:0.02};
+  if (kind === 'crate') return {hx:15,hy:15,density:1.25,friction:0.68,bounce:0.12};
+  if (kind === 'hydrant') return {hx:11,hy:11,density:1.7,friction:0.62,bounce:0.08,circle:true};
+  if (kind === 'cone') return {hx:10,hy:12,density:0.32,friction:0.5,bounce:0.24};
+  return {hx:11,hy:14,density:0.7,friction:0.55,bounce:0.06};
+}
+function makePropBody(world: any, prop: Prop): number {
+  const cfg = propPhysics(prop.kind);
+  const body = world.createBody({ type: 'dynamic', position: pl.Vec2(prop.x / PPM, prop.y / PPM), angle: prop.angle || 0 });
+  const shape = cfg.circle ? pl.Circle(cfg.hx / PPM) : pl.Box(cfg.hx / PPM, cfg.hy / PPM);
+  body.createFixture(shape, { density: cfg.density, friction: cfg.friction, restitution: cfg.bounce });
+  body.setLinearDamping(2.8);
+  body.setAngularDamping(4.5);
+  return bodyId(world, body);
+}
+function propPoints(kind: PropKind): number { return kind === 'car' ? 35 : kind === 'bench' ? 20 : 10; }
+function propRadius(kind: PropKind): number { return kind === 'car' ? 31 : kind === 'bench' ? 24 : 17; }
+function particleColors(kind: PropKind): string[] {
+  if (kind === 'car') return ['#e66a25','#454c52','#9dcbd2','#c0cbd0'];
+  if (kind === 'bench' || kind === 'crate') return ['#b77b43','#dba05f','#80512f','#e6b975'];
+  if (kind === 'bin') return ['#299c6f','#45ce8b','#d6e3cf'];
+  if (kind === 'hydrant' || kind === 'cone') return ['#f17b31','#d95127','#ffe0a2'];
+  return ['#d3d6d2','#899a9c','#e7c58b'];
+}
+function addParticles(state: State, ctx: any, x: number, y: number, kind: PropKind, count = 10): void {
+  const world = ctx.physics;
+  const colors = particleColors(kind);
+  for (let i = 0; i < count; i++) {
+    const angle = ctx.rng() * Math.PI * 2;
+    const speed = 1.1 + ctx.rng() * 3.8; // pixels per tick
+    const size = 3 + ctx.int(6);
+    const px = x + (ctx.rng() - 0.5) * 10;
+    const py = y + (ctx.rng() - 0.5) * 10;
+    const body = world.createBody({ type: 'dynamic', position: pl.Vec2(px / PPM, py / PPM), angle: ctx.rng() * Math.PI * 2 });
+    body.createFixture(pl.Box(Math.max(2, size * 0.5) / PPM, Math.max(2, size * 0.35) / PPM), {
+      density: kind === 'car' ? 0.6 : 0.35,
+      friction: 0.62,
+      restitution: kind === 'cone' ? 0.28 : 0.16,
+    });
+    body.setLinearVelocity(pl.Vec2(Math.cos(angle) * speed * ctx.tickRate / PPM, Math.sin(angle) * speed * ctx.tickRate / PPM - 1.2));
+    body.setLinearDamping(2.4);
+    body.setAngularVelocity((ctx.rng() - 0.5) * 9);
+    body.setAngularDamping(2.5);
+    state.particles.push({ id: state.nextParticleId++, body: bodyId(world, body), x: px, y: py, life: 18 + ctx.int(24), size, color: colors[ctx.int(colors.length)], rotation: 0 });
+  }
+  while (state.particles.length > MAX_PARTICLES) {
+    const old = state.particles.shift();
+    if (old) destroyBody(ctx, old.body);
   }
 }
-function destroyProp(state: State, ctx: any, prop: Prop, player: Player): void {
+function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null): void {
   if (!prop.active) return;
   prop.active = false;
   prop.respawnAt = ctx.frame + 240;
-  player.score += propPoints(prop.kind);
+  destroyBody(ctx, prop.body);
+  prop.body = -1;
+  if (player) player.score += propPoints(prop.kind);
   addParticles(state, ctx, prop.x, prop.y, prop.kind, prop.kind === 'car' ? 18 : 11);
+}
+function muzzlePosition(p: Player): {x:number;y:number} {
+  // Local weapon grip is (8, 4); barrel runs toward local up. Convert through the sprite's +90° facing offset.
+  return { x: p.x + Math.cos(p.angle) * 25 - Math.sin(p.angle) * 8, y: p.y + Math.sin(p.angle) * 25 + Math.cos(p.angle) * 8 };
 }
 
 export default defineSim({
   name: 'chaos-city',
-  version: '2',
+  version: '3',
   tickRate: 20,
   maxPlayers: 32,
+  physics: box2dPhysics,
   input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', buttons: { flags: ['fire', 'smash'] } },
 
-  init(): State {
-    return {
-      players: {},
-      props: PROP_SEEDS.map((p, i) => ({ id: i, ...p, active: true, respawnAt: 0 })),
-      bullets: [], particles: [], nextBulletId: 1, nextParticleId: 1,
-    };
+  fingerprint(state, id, { physics }) {
+    const player = state.players[id];
+    if (!player) return null;
+    const body = bodyFromId(physics, player.body);
+    if (!body) return null;
+    const pos = body.getPosition();
+    return { x: Math.round(pos.x * 100) / 100, y: Math.round(pos.y * 100) / 100, angle: Math.round(body.getAngle() * 1000) / 1000 };
+  },
+
+  init(ctx): State {
+    const world: any = ctx.physics;
+    makeMapPhysics(world);
+    const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, active: true, respawnAt: 0, body: -1, angle: 0 }));
+    for (const prop of props) prop.body = makePropBody(world, prop);
+    return { players: {}, props, bullets: [], particles: [], nextBulletId: 1, nextParticleId: 1 };
   },
 
   join(state, id, ctx, info) {
-    const spawn = openSpawn(ctx);
+    const spawn = openSpawn(ctx, state);
+    const body = makePlayerBody(ctx.physics, spawn.x, spawn.y);
     state.players[id] = {
-      name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y,
+      name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y, body,
       move: [0, 0], angle: 0, weapon: 0, fire: false, smash: false,
       fireCooldown: 0, smashCooldown: 0, score: 0, health: 100, invulnerable: 45,
-      color: ctx.int(6),
+      color: ctx.int(6), muzzleFlash: 0, shotSeq: 0,
     };
   },
 
-  leave(state, id) {
+  leave(state, id, ctx) {
+    const p = state.players[id];
+    if (p) destroyBody(ctx, p.body);
     delete state.players[id];
     state.bullets = state.bullets.filter((b) => b.owner !== id);
   },
@@ -188,43 +272,88 @@ export default defineSim({
   },
 
   step(state, ctx) {
+    const world: any = ctx.physics;
     for (const prop of state.props) {
-      if (!prop.active && ctx.frame >= prop.respawnAt) prop.active = true;
+      if (!prop.active && ctx.frame >= prop.respawnAt) {
+        prop.active = true;
+        prop.angle = 0;
+        prop.body = makePropBody(world, prop);
+      }
     }
 
+    // Set velocities from player inputs in metres/second; body collisions push physical props naturally.
     for (const id of Object.keys(state.players).sort()) {
       const p = state.players[id];
       if (p.fireCooldown > 0) p.fireCooldown--;
       if (p.smashCooldown > 0) p.smashCooldown--;
       if (p.invulnerable > 0) p.invulnerable--;
-
-      let mx = p.move[0];
-      let my = p.move[1];
+      if (p.muzzleFlash > 0) p.muzzleFlash--;
+      let mx = p.move[0], my = p.move[1];
       const len = Math.sqrt(mx * mx + my * my);
       if (len > 1) { mx /= len; my /= len; }
-      const nx = Math.max(PLAYER_R, Math.min(W - PLAYER_R, p.x + mx * MOVE_SPEED));
-      const ny = Math.max(PLAYER_R, Math.min(H - PLAYER_R, p.y + my * MOVE_SPEED));
-      if (!blocked(nx, p.y)) p.x = nx;
-      if (!blocked(p.x, ny)) p.y = ny;
+      const body = bodyFromId(world, p.body);
+      if (body) {
+        // Rotate the collision box with the same corrected angle used to draw the up-facing sprite.
+        body.setTransform(body.getPosition(), p.angle + Math.PI / 2);
+        body.setAngularVelocity(0);
+        body.setLinearVelocity(pl.Vec2(mx * MOVE_SPEED * ctx.tickRate / PPM, my * MOVE_SPEED * ctx.tickRate / PPM));
+      }
+    }
 
+    world.step(1 / ctx.tickRate, 8, 3);
+
+    // Synchronise pixel-space game state to physics world poses after the deterministic world step.
+    for (const id of Object.keys(state.players).sort()) {
+      const p = state.players[id];
+      const body = bodyFromId(world, p.body);
+      if (body) {
+        const pos = body.getPosition();
+        p.x = pos.x * PPM; p.y = pos.y * PPM;
+      }
+    }
+    for (const prop of state.props) {
+      if (!prop.active) continue;
+      const body = bodyFromId(world, prop.body);
+      if (body) {
+        const pos = body.getPosition();
+        prop.x = pos.x * PPM; prop.y = pos.y * PPM; prop.angle = body.getAngle();
+      }
+    }
+    const liveParticles: Particle[] = [];
+    for (const particle of state.particles) {
+      const body = bodyFromId(world, particle.body);
+      if (body) {
+        const pos = body.getPosition();
+        particle.x = pos.x * PPM; particle.y = pos.y * PPM; particle.rotation = body.getAngle();
+      }
+      particle.life--;
+      if (particle.life > 0) liveParticles.push(particle);
+      else destroyBody(ctx, particle.body);
+    }
+    state.particles = liveParticles;
+
+    // Smash and weapon firing happen after the world step, using its latest positions.
+    for (const id of Object.keys(state.players).sort()) {
+      const p = state.players[id];
       if (p.smash && p.smashCooldown <= 0) {
         p.smashCooldown = SMASH_COOLDOWN;
         for (const prop of state.props) {
           if (!prop.active) continue;
-          const dx = prop.x - p.x;
-          const dy = prop.y - p.y;
+          const dx = prop.x - p.x, dy = prop.y - p.y;
           if (dx * dx + dy * dy <= SMASH_RANGE * SMASH_RANGE) destroyProp(state, ctx, prop, p);
         }
       }
-
-      if (p.fire && p.fireCooldown <= 0) {
+      if (p.fire && p.fireCooldown <= 0 && state.bullets.length < 350) {
         const weapon = WEAPONS[p.weapon] || WEAPONS[0];
+        const muzzle = muzzlePosition(p);
         p.fireCooldown = weapon.cooldown;
+        p.muzzleFlash = 2;
+        p.shotSeq++;
         for (let pellet = 0; pellet < weapon.pellets && state.bullets.length < 350; pellet++) {
           const a = p.angle + (ctx.rng() - 0.5) * weapon.spread;
           state.bullets.push({
             id: state.nextBulletId++, owner: id,
-            x: p.x + Math.cos(a) * 20, y: p.y + Math.sin(a) * 20,
+            x: muzzle.x, y: muzzle.y,
             vx: Math.cos(a) * weapon.speed, vy: Math.sin(a) * weapon.speed,
             damage: weapon.damage, life: weapon.life, color: weapon.color,
           });
@@ -234,9 +363,7 @@ export default defineSim({
 
     const liveBullets: Bullet[] = [];
     for (const b of state.bullets) {
-      b.x += b.vx;
-      b.y += b.vy;
-      b.life--;
+      b.x += b.vx; b.y += b.vy; b.life--;
       if (b.life <= 0 || b.x < 0 || b.y < 0 || b.x > W || b.y > H) continue;
       if (BUILDINGS.some((building) => b.x >= building.x && b.x <= building.x + building.w && b.y >= building.y && b.y <= building.y + building.h)) continue;
       if (TREES.some((tree) => {
@@ -247,14 +374,10 @@ export default defineSim({
       let hitProp = false;
       for (const prop of state.props) {
         if (!prop.active) continue;
-        const dx = prop.x - b.x, dy = prop.y - b.y;
-        const r = propRadius(prop.kind);
+        const dx = prop.x - b.x, dy = prop.y - b.y, r = propRadius(prop.kind);
         if (dx * dx + dy * dy <= r * r) {
-          const shooter = state.players[b.owner];
-          if (shooter) destroyProp(state, ctx, prop, shooter);
-          else { prop.active = false; prop.respawnAt = ctx.frame + 240; }
-          hitProp = true;
-          break;
+          destroyProp(state, ctx, prop, state.players[b.owner] || null);
+          hitProp = true; break;
         }
       }
       if (hitProp) continue;
@@ -267,28 +390,27 @@ export default defineSim({
         const dx = target.x - b.x, dy = target.y - b.y;
         if (dx * dx + dy * dy <= (PLAYER_R + 3) * (PLAYER_R + 3)) {
           target.health -= b.damage;
+          const targetBody = bodyFromId(world, target.body);
+          if (targetBody) {
+            const velocity = targetBody.getLinearVelocity();
+            targetBody.setLinearVelocity(pl.Vec2(velocity.x + b.vx * 0.035 / PPM, velocity.y + b.vy * 0.035 / PPM));
+          }
           if (target.health <= 0) {
-            const spawn = openSpawn(ctx);
+            const spawn = openSpawn(ctx, state, id);
             target.x = spawn.x; target.y = spawn.y; target.health = 100;
             target.invulnerable = 55; target.score = Math.max(0, target.score - 15);
+            if (targetBody) {
+              targetBody.setTransform(pl.Vec2(spawn.x / PPM, spawn.y / PPM), target.angle + Math.PI / 2);
+              targetBody.setLinearVelocity(pl.Vec2(0, 0));
+              targetBody.setAngularVelocity(0);
+            }
             addParticles(state, ctx, b.x, b.y, 'car', 16);
           }
-          hitPlayer = true;
-          break;
+          hitPlayer = true; break;
         }
       }
       if (!hitPlayer) liveBullets.push(b);
     }
     state.bullets = liveBullets;
-
-    const liveParticles: Particle[] = [];
-    for (const p of state.particles) {
-      p.x += p.vx; p.y += p.vy;
-      p.vx *= 0.94; p.vy = p.vy * 0.94 + 0.075;
-      p.rotation += p.spin;
-      p.life--;
-      if (p.life > 0) liveParticles.push(p);
-    }
-    state.particles = liveParticles;
   },
 });

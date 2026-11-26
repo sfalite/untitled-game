@@ -1,27 +1,29 @@
-# Chaos City.io — modd.io SDK
+# Chaos City.io — modd.io SDK update
 
-A 2D top-down multiplayer city prototype built on the modd.io SDK.
+This package builds on the supplied modd.io project and adds the requested player aiming, hand-anchored weapons, weapon audio and physics changes.
 
-## Implemented in this build
+## Included changes
 
-- English title/menu/HUD and a modd.io server browser populated by `pageRooms()`.
-- Region selection from the platform's own `regions` list, existing server selection, quick Play and Create New Server.
-- `moddio.json` starts at the game's own menu (`"menu": true`). Press **M** during a match to leave the room and return to the menu.
-- Uses the provided 1728×1280 tilesheet (27×20 64px atlas) as local map/prop/building texture data, the provided 43×35 player sprite, and the provided 128×128 green tree sprite.
-- Separate renderer layers named `floor`, `floor2`, `walls`, and `trees`, plus independent interactive props and player entities.
-- Camera tracks the local player at a moderate responsive zoom.
-- Four game inventory slots: AK-47, M249, M134 Minigun and Shotgun. Keys 1–4 select them; the rendered weapon is attached on the right side of the character sprite.
-- Health HUD centred at the bottom with a green rounded bar and `100 / 100` text.
-- Deterministic bullets, damage/respawn, breakable props, score, and coloured debris particles.
-- WASD / arrow movement, mouse or F to fire, Space to smash, click/tap an inventory slot to select it; `controls()` supplies touch controls including Fire, Smash and Menu buttons.
+- The player uses the supplied `assets/player.png` at its exact source size of 43×35 world pixels.
+- The sprite faces up at rest; visual rotation applies the required +90° offset so it faces the mouse aim direction while bullets still travel along the exact aim angle.
+- Weapons are drawn in the sprite's local facing-up space and anchored at its right-hand point. The item position and angle therefore rotate together with the player.
+- `assets/audio/fire_rifle.mp3` is used while firing the AK-47 or M249; `fire_minigun.mp3` while firing the M134; `fire_shotgun.mp3` on each shotgun shot.
+- A short, locally rendered muzzle spark appears at the weapon muzzle on fire frames.
+- The simulation uses the modd.io `@moddio/sim/planck` adapter (Planck/Box2D-style physics) for players, city buildings, trees, movable props and debris. Physics units are scaled at 32 pixels per metre, densities, friction, restitution and damping vary by entity type, the local player has a body-pose prediction fingerprint, and the Planck world is canonicalised every 100 frames to reduce contact-cache desynchronisation.
+- Movement, collision and prop poses remain in the deterministic sim. The client only renders the state and plays local audio.
 
-## Apply to the existing repository
+## Local assets
 
-Copy the contents of this ZIP over the matching paths in `sfalite/untitled-game`, including the updated `CLAUDE.md`. Keep the existing `llms.txt`, `.gitignore`, `tsconfig.json`, and repository history. This package keeps the original `game` slug in `moddio.json`.
+- `assets/tilesheet_complete.png`: original 1728×1280 atlas.
+- `assets/player.png`: supplied 43×35 player sprite.
+- `assets/trees/tree.png`: supplied 128×128 tree sprite.
+- `assets/audio/`: the three provided MP3 sound effects.
 
-## Test before publishing
+All game assets are loaded from the project's own files; there are no external asset URLs.
 
-Use Node.js 22 or later in the project folder:
+## Test locally
+
+Use Node.js 22 or newer in this project folder:
 
 ```sh
 npm install
@@ -29,12 +31,6 @@ npx moddio test
 npx moddio dev
 ```
 
-Open the play page in two tabs with different `?player=` values and verify that movement, weapons, scoring, health, collisions and the M-to-menu flow work in both clients. Then run `npx moddio play --players 2 --seconds 15 --shots 5,10` and inspect the screenshots/logs. Publish only after tests pass:
+Open two dev players as described in `llms.txt`; verify that movement collides with walls, players can push props, debris settles and collides, aim tracks the pointer, and each weapon uses its assigned sound. Test mouse, keyboard and touch before publishing.
 
-```sh
-npx moddio publish
-```
-
-## Honest test status
-
-See `TEST-REPORT.md`: the TypeScript syntax and a simulation smoke test passed with local SDK stubs, but dependency installation timed out and the archive has not been run through the real modd.io CLI or its browser sandbox in this environment. Treat it as a test build until the commands above pass. Weapon names are game items; damage, spread and cooldowns are balancing values, not real-world instructions.
+The official modd.io test should be run after installing the actual SDK dependencies. A local TypeScript syntax check is not a substitute for the platform's deterministic replay and browser sandbox tests.
