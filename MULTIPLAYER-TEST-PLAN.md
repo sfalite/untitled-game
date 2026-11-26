@@ -39,3 +39,12 @@ Open two separate browser sessions and join the same server. Toggle F3 in each s
 ## Current limitation
 
 The F3 panel reads values exposed by the SDK. Some fields may show `--` if unavailable in a particular runtime/build. The overlay is observational and must not be treated as an automated pass/fail guarantee. Live browser tests are still required.
+
+
+## Update v23 — Weapon Diagnostics
+- [ ] Open F3 and verify shot events appear in lifecycle order: REQUEST → SPAWN → HIT or EXPIRED.
+- [ ] Fire one Glock shot into a wall; confirm the trace shows one spawn and a hit at the wall, with no hit event behind it.
+- [ ] Fire the Shotgun into a wall; confirm each pellet has a distinct pellet index and each stops at its first collision.
+- [ ] Fire while moving and rotating; compare F4 muzzle markers with F3 spawn coordinates.
+- [ ] Enable F4 and verify player/building/tree/prop hitbox overlays correspond to the collision geometry.
+- [ ] Confirm the trace ring remains bounded to 32 events during automatic fire and does not grow without limit.

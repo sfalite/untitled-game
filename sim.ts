@@ -10,7 +10,7 @@ const W = COLS * TILE;
 const H = ROWS * TILE;
 const PPM = 32;
 const PLAYER_SPAWN_R = 28;
-const MOVE_SPEED = 4.7; // pixels per simulation tick
+const MOVE_SPEED = 5.2; // pixels per simulation tick; ~10.6% faster than v24
 const SMASH_RANGE = 60;
 const SMASH_COOLDOWN = 12;
 const MAX_PARTICLES = 180;
@@ -167,8 +167,14 @@ type Player = {
 type WeaponPickup = { id: number; x: number; y: number; weaponId: number; angle: number; createdFrame: number };
 type Bullet = { id: number; owner: string; shotSeq: number; shotToken: number; shotKey: string; pelletIndex: number; x: number; y: number; weaponId: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
 type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
+type ShotTraceKind = 'request' | 'spawn' | 'hit' | 'expired' | 'rejected';
+type ShotTraceEvent = {
+  id: number; frame: number; kind: ShotTraceKind; owner: string; token: number; weaponId: number;
+  pelletIndex: number; x: number; y: number; target: string; detail: string;
+};
 type State = {
   players: Record<string, Player>; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[];
+  shotTrace: ShotTraceEvent[]; nextShotTraceId: number;
   nextBulletId: number; nextParticleId: number; nextPickupId: number;
 };
 
@@ -520,9 +526,26 @@ function muzzlePosition(p: Pick<Player, 'x' | 'y' | 'aimAngle'>, weaponId: numbe
   };
 }
 
+// Small deterministic diagnostic ring buffer. It records the authoritative lifecycle of shots
+// without changing gameplay decisions. Keeping only the newest events bounds replicated state.
+function recordShotTrace(
+  state: State,
+  ctx: any,
+  event: Omit<ShotTraceEvent, 'id' | 'frame'>,
+): void {
+  if (!Array.isArray(state.shotTrace)) state.shotTrace = [];
+  if (!Number.isFinite(state.nextShotTraceId)) state.nextShotTraceId = 1;
+  state.shotTrace.push({
+    id: state.nextShotTraceId++,
+    frame: Math.max(0, Math.floor(Number(ctx?.frame) || 0)),
+    ...event,
+  });
+  if (state.shotTrace.length > 16) state.shotTrace.splice(0, state.shotTrace.length - 16);
+}
+
 export default defineSim({
   name: 'chaos-city',
-  version: '25',
+  version: '27',
   tickRate: 20,
   maxPlayers: 32,
   // Predict only the local player. The SDK interpolates remote players from authoritative
@@ -553,7 +576,11 @@ export default defineSim({
     makeMapPhysics(world);
     const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, prevX: p.x, prevY: p.y, prevAngle: 0, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0, health: propMaxHealth(p.kind) }));
     for (const prop of props) prop.body = makePropBody(world, prop);
-    return { players: {}, props, pickups: [], bullets: [], particles: [], nextBulletId: 1, nextParticleId: 1, nextPickupId: 1 };
+    return {
+      players: {}, props, pickups: [], bullets: [], particles: [],
+      shotTrace: [], nextShotTraceId: 1,
+      nextBulletId: 1, nextParticleId: 1, nextPickupId: 1,
+    };
   },
 
   join(state, id, ctx, info) {
@@ -595,12 +622,15 @@ export default defineSim({
       // If multiple input changes were coalesced, keep only the latest request rather than
       // replaying a stale burst long after the player released the trigger.
       if (delta > 1) {
-        // Inputs can be coalesced under latency. Resolve skipped tokens so client-side tracer
-        // predictions are removed instead of lingering as ghost bullets. Only the newest request
-        // is kept; replaying skipped shots later would create delayed volleys from the wrong place.
+        // Inputs can be coalesced under latency. Only the newest request is kept; do not replay
+        // skipped clicks later from a stale position. Record the coalescing for F3 diagnostics.
         p.pendingShots = [];
         p.lastResolvedClientShotToken = (nextToken - 1) >>> 0;
         p.lastResolvedClientShotKey = `${id}:${p.lastResolvedClientShotToken}`;
+        recordShotTrace(state, ctx, {
+          kind: 'rejected', owner: id, token: p.lastResolvedClientShotToken, weaponId: Number(input.shotWeapon) | 0,
+          pelletIndex: -1, x: p.x, y: p.y, target: '', detail: `coalesced ${delta - 1} token(s)`,
+        });
       }
       const request: PendingShot = {
         token: nextToken,
@@ -613,6 +643,10 @@ export default defineSim({
         x: p.x, y: p.y, receivedFrame: Number(ctx?.frame) || 0,
       };
       p.pendingShots.push(request);
+      recordShotTrace(state, ctx, {
+        kind: 'request', owner: id, token: request.token, weaponId: request.weaponId,
+        pelletIndex: -1, x: request.x, y: request.y, target: '', detail: `slot ${request.slot}; queued`,
+      });
       // Bound queued shots under a lag spike; discarded requests are resolved so local
       // provisional tracers cannot remain as ghosts if they never existed authoritatively.
       while (p.pendingShots.length > 4) {
@@ -620,6 +654,10 @@ export default defineSim({
         if (dropped) {
           p.lastResolvedClientShotToken = dropped.token;
           p.lastResolvedClientShotKey = dropped.shotKey;
+          recordShotTrace(state, ctx, {
+            kind: 'rejected', owner: id, token: dropped.token, weaponId: dropped.weaponId,
+            pelletIndex: -1, x: dropped.x, y: dropped.y, target: '', detail: 'queue overflow',
+          });
         }
       }
     }
@@ -789,6 +827,10 @@ export default defineSim({
           p.pendingShots.shift();
           p.lastResolvedClientShotToken = pending.token;
           p.lastResolvedClientShotKey = pending.shotKey;
+          recordShotTrace(state, ctx, {
+            kind: 'rejected', owner: id, token: pending.token, weaponId: pending.weaponId,
+            pelletIndex: -1, x: pending.x, y: pending.y, target: '', detail: weaponValid ? 'slot changed before fire' : 'invalid weapon id',
+          });
           continue;
         }
         if (p.fireCooldowns[pending.weaponId] > 0) break;
@@ -796,6 +838,10 @@ export default defineSim({
           p.pendingShots.shift();
           p.lastResolvedClientShotToken = pending.token;
           p.lastResolvedClientShotKey = pending.shotKey;
+          recordShotTrace(state, ctx, {
+            kind: 'rejected', owner: id, token: pending.token, weaponId: pending.weaponId,
+            pelletIndex: -1, x: pending.x, y: pending.y, target: '', detail: 'projectile capacity reached',
+          });
           break;
         }
 
@@ -829,6 +875,10 @@ export default defineSim({
             vx: Math.cos(a) * weapon.speed, vy: Math.sin(a) * weapon.speed,
             damage: weapon.damage, life: weapon.life, color: weapon.color, bornFrame: ctx.frame, age: 0,
           });
+          recordShotTrace(state, ctx, {
+            kind: 'spawn', owner: id, token: pending.token, weaponId, pelletIndex: pellet,
+            x: muzzle.x, y: muzzle.y, target: '', detail: `bullet #${state.nextBulletId - 1}`,
+          });
         }
         // A single request is processed per player per frame. The remaining queue waits for that
         // specific weapon's cooldown; switching weapons does not inherit another gun's cooldown.
@@ -848,7 +898,17 @@ export default defineSim({
       const x0 = b.x, y0 = b.y;
       const x1 = b.x + b.vx, y1 = b.y + b.vy;
       b.x = x1; b.y = y1; b.life--; b.age++;
-      if (b.life <= 0 || x1 < 0 || y1 < 0 || x1 > W || y1 > H) continue;
+      const leftMap = x1 < 0 || y1 < 0 || x1 > W || y1 > H;
+      if (b.life <= 0 || leftMap) {
+        // Normal lifetime expiry is expected and can happen many times per second during combat.
+        // Keep the replicated trace for abnormal out-of-map exits only, limiting diagnostic state
+        // churn so observing shots cannot burden the gameplay/network simulation.
+        if (leftMap) recordShotTrace(state, ctx, {
+          kind: 'expired', owner: b.owner, token: b.shotToken, weaponId: b.weaponId, pelletIndex: b.pelletIndex,
+          x: x1, y: y1, target: '', detail: 'left map bounds',
+        });
+        continue;
+      }
       // Find the first collider along this tick's swept segment. All collisions are resolved by
       // time-of-impact, not by category/list order. Previously a distant prop in the props array
       // could absorb a bullet before a nearer player, or a wall farther down the ray could prevent
@@ -893,6 +953,15 @@ export default defineSim({
       if (hit) {
         b.x = x0 + (x1 - x0) * hit.t;
         b.y = y0 + (y1 - y0) * hit.t;
+        const impactTarget = hit.kind === 'player'
+          ? `player:${hit.playerId || 'unknown'}`
+          : hit.kind === 'prop' && hit.prop
+            ? `prop:${hit.prop.kind}#${hit.prop.id}`
+            : hit.kind;
+        recordShotTrace(state, ctx, {
+          kind: 'hit', owner: b.owner, token: b.shotToken, weaponId: b.weaponId, pelletIndex: b.pelletIndex,
+          x: b.x, y: b.y, target: impactTarget, detail: 'first collision; projectile stopped',
+        });
         if (hit.kind === 'prop' && hit.prop) {
           damageProp(state, ctx, hit.prop, b.damage, state.players[b.owner] || null);
         } else if (hit.kind === 'player' && hit.playerId) {

@@ -1,20 +1,18 @@
-# Chaos City.io — Update v22 network integration report
+# Chaos City.io — Update v25 test report
 
-## Changes
+## Change
 
-- Kept the SDK-managed architecture rather than adding duplicate prediction or interpolation code.
-- Explicitly enabled `inputLead: true` in `playInWorker`, consistent with `predict: 'self'`.
-- Expanded F3 diagnostics to state the intended configuration: local prediction, SDK reconciliation/rollback, SDK remote interpolation, deterministic Planck canonical rebuilds, one authoritative projectile source, actual ping and SDK input lead/margin.
-- Added `MULTIPLAYER-NETCODE.md` explaining each feature and how to validate it.
-- No changes to `sim.ts` gameplay rules or projectile collision mechanics.
+- Increased the authoritative player movement speed from 4.7 to 5.2 pixels per simulation tick (+10.638%).
+- At the configured 20 ticks per second, nominal movement changes from 94 to 104 pixels per second.
+- Changed only the `MOVE_SPEED` constant in `sim.ts`; the same physics velocity calculation continues to be used by all clients and the room simulation.
+- Weapon input recovery, projectile collision, inventory, map, vehicle health, and tree collision settings are unchanged from v24.
 
-## Validation in this environment
+## Static checks
 
-- Checked `sim.ts`, `client/main.ts`, and `moddio.json` structure manually.
-- Verified `inputLead: true` appears on the `playInWorker` options object, not inside the input payload.
-- Verified the F3 diagnostics contain all requested network-technique indicators and the existing shot counters.
-- Verified project assets and relative paths remain unchanged.
+- Confirmed one authoritative `MOVE_SPEED` constant and its only player movement use in the Planck velocity assignment.
+- Confirmed no stale `MOVE_SPEED = 4.7` declaration remains.
+- ZIP file list and integrity check passed.
 
 ## Not run
 
-`npx moddio test`, `npx moddio play`, and live multiplayer rooms have not been run in this environment. The installed SDK package/CLI is not available here, so this package must still be validated inside modd.io or with the official CLI. The update should not be described as proving that all multiplayer bugs are fixed.
+- Official `npx moddio test` and live multiplayer session in modd.io were not run in this environment. This is a small movement tuning change, but validate that movement still feels right and does not create excessive wall sliding/overshooting in the actual game.

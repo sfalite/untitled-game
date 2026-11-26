@@ -20,3 +20,7 @@ This note maps the requested multiplayer techniques to the modd.io SDK integrati
 - `inputLead: true` does not reduce physical network ping. It schedules inputs to make prediction/reconciliation more robust under latency; perceived response still depends on local prediction and frame scheduling.
 - A green/low `desync` count is evidence, not proof of every visual property being correct. The real modd.io browser must be tested with multiple clients.
 - Recommended sequence: `npx moddio test`, then `npx moddio play --players 2 --seconds 30 --shots 3,10,20`, then test 2–3 real clients in the same modd.io room while pressing F3.
+
+
+## Shot lifecycle diagnostics (Update v23)
+The simulation keeps only the newest 32 `shotTrace` events. Each entry includes the authoritative frame, owner, token, weapon, pellet index, world position, and outcome. The log is ordinary deterministic state, so it follows rollback and does not use clocks, network calls, or random values. F3 displays the latest three events. F4 draws the existing hitbox geometry for visual inspection. These tools observe the current implementation; they do not create a second projectile or collision system.

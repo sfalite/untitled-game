@@ -1,25 +1,30 @@
-# Chaos City.io — Update v22
+# Chaos City.io — Update v25 (slightly faster movement)
 
-This update makes the existing modd.io multiplayer integration explicit and exposes its state in the F3 diagnostics panel. It does not add a separate custom netcode implementation that could fight the SDK.
+This update keeps the v24 weapon-input recovery changes and makes player movement slightly faster. `MOVE_SPEED` increases from 4.7 to 5.2 pixels per simulation tick (about +10.6%). Movement remains controlled by the same authoritative Planck simulation path, so client/server movement rules are not split.
 
-## Networking behavior
+The previous input-recovery changes remain in place:
 
-- `predict: 'self'`: the SDK predicts the local player and interpolates remote players.
-- `playInWorker({ inputLead: true, ... })`: explicitly keeps the SDK's default input scheduling enabled.
-- `sim.ts`: authoritative game rules and projectile collision/damage. Planck uses `canonicalEvery = 100` for deterministic world rebuilds during reconciliation/rollback.
-- `client/main.ts`: only the authoritative simulation's bullet list is rendered. Local sound and muzzle flash do not create provisional bullets.
-- Press **F3** in-game to inspect FPS, ping, frame gap, input lead/margin, desync, local drift, and shot token lifecycle.
+- The shot-token baseline was primarily seeded from `state.players[game.player]`, which is not guaranteed to hold the self-predicted local player. `drawGame` now seeds the baseline from the merged player state returned by `mergeSelf`, with a one-time `game.inspect()` fallback.
+- Very short clicks could start and end between input samples. A pointerdown pulse now survives until the next input callback can safely consume it, and inventory-slot clicks are filtered out. The pulse is consumed once, so it cannot create a duplicate fire event.
 
-See `MULTIPLAYER-NETCODE.md` for a table mapping each networking technique to its implementation and limits.
+The authoritative simulation remains the only source of bullet positions and collision outcomes. I reduced diagnostic-state churn by capping shot traces at 16 events and no longer recording routine bullet lifetime expiry; out-of-map exits are still logged.
 
-## Test commands
+## Controls
+- Mouse click / F: fire or punch
+- Hold trigger to continue auto fire with AK-47, M249, or M134
+- 1–5: select inventory slot
+- E: pick up; G: drop
+- F3: multiplayer diagnostics; F4: collider overlay; M: menu
 
-Node.js 22 or later and working access to the npm registry are required. From this project directory run:
+## Apply
+Copy the contents of `chaos-city-io/` into the root of the existing modd.io project, replacing matching files. Keep the existing `llms.txt`, `.gitignore`, and `tsconfig.json`.
 
-```sh
-npx moddio test
-npx moddio play --players 2 --seconds 30 --shots 3,10,20
-npx moddio play --players 3 --seconds 60 --shots 5,15,30
-```
+## Validation
+Local TypeScript check passed against temporary declarations for the SDK modules. Official `npx moddio test` and a live modd.io multiplayer session were not run in this environment; validate on modd.io before publishing.
 
-The CLI/browser tests must be run on the real SDK. A TypeScript check alone does not confirm live multiplayer behavior. Preserve the repository's existing `llms.txt`, `.gitignore`, and `tsconfig.json` when applying this package.
+
+## Movement tuning
+- Previous speed: 4.7 pixels/tick (94 px/s at 20 ticks/s).
+- New speed: 5.2 pixels/tick (104 px/s at 20 ticks/s).
+- Increase: approximately 10.6%.
+- Player collision dimensions, acceleration/physics model, weapon balance, and tick rate are unchanged.
