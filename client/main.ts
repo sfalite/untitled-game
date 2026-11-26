@@ -1026,10 +1026,14 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   const resolvedToken = finiteMetric(mine.lastResolvedClientShotToken);
   const queued = Array.isArray(mine.pendingShots) ? mine.pendingShots.length : 0;
   const mismatch = netDiagnostics.desyncDisagreed;
-  lines.push(`SDK PREDICTION: ${netDiagnostics.mode} · local prediction + server authority`);
+  lines.push(`PREDICTION ${netDiagnostics.mode} · local player predicted, room authoritative`);
+  lines.push(`RECONCILIATION SDK rollback/replay · self prediction`);
+  lines.push(`REMOTE BUFFER SDK interpolation · no second custom buffer`);
+  lines.push(`SIM deterministic Planck · canonical rebuild every 100 frames`);
+  lines.push(`SHOTS authoritative-only visuals · one projectile source`);
   lines.push(`FPS ${displayedFps || '--'} · PING ${displayedPingMs == null ? '--' : displayedPingMs + ' ms'} · AVG/MAX ${avgPing == null ? '--' : avgPing}/${maxPing == null ? '--' : maxPing} ms`);
   lines.push(`FRAMES confirmed ${confirmed ?? '--'} · predicted ${predicted ?? '--'} · gap ${frameGap ?? '--'}`);
-  lines.push(`INPUT LEAD ${netDiagnostics.leadMs == null ? '--' : Math.round(netDiagnostics.leadMs) + ' ms'} · MARGIN ${netDiagnostics.marginMs == null ? '--' : Math.round(netDiagnostics.marginMs) + ' ms'}`);
+  lines.push(`INPUT LEAD ON · measured ${netDiagnostics.leadMs == null ? '--' : Math.round(netDiagnostics.leadMs) + ' ms'} · MARGIN ${netDiagnostics.marginMs == null ? '--' : Math.round(netDiagnostics.marginMs) + ' ms'}`);
   lines.push(`DESYNC agreed ${netDiagnostics.desyncAgreed ?? '--'} · disagreed ${mismatch ?? '--'} · hash ${netDiagnostics.confirmedHash}`);
   lines.push(`LOCAL (${Math.round(mine.x)}, ${Math.round(mine.y)}) · aim ${Math.round(aimDegrees)}° · HP ${Math.round(mine.health ?? 0)}`);
   lines.push(`DRIFT predicted-confirmed ${netDiagnostics.localDriftPx == null ? '--' : netDiagnostics.localDriftPx.toFixed(1) + ' px'} · players ${Object.keys(state.players || {}).length}`);
@@ -1305,6 +1309,11 @@ function cursorWorldPosition(): { x: number; y: number } {
 async function startWorker(): Promise<void> {
   resetLocalShotState();
   const game = await playInWorker({
+    // Keep the SDK's normal input lead explicitly enabled. Local prediction still gives the
+    // controlled player immediate movement; the room applies inputs in the scheduled frames and
+    // the SDK reconciles/replays predictions against authoritative snapshots. Do not disable this
+    // for a game using self prediction, physics, and remote-player interpolation.
+    inputLead: true,
     input: () => {
       if (keys.pressed('1')) selectedWeapon = 0;
       if (keys.pressed('2')) selectedWeapon = 1;
