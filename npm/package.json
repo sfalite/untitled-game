@@ -1,0 +1,8 @@
+{
+  "name": "chaos-city-renderer-deps",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pixi.js": "8.23.0"
+  }
+}
