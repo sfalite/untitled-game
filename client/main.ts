@@ -1,3 +1,5 @@
+import { Application as PixiApplication, Container as PixiContainer, Graphics as PixiGraphics, Sprite as PixiSprite, Texture as PixiTexture } from 'pixi.js';
+
 import {
   atMenu,
   canvas2d,
@@ -7,11 +9,41 @@ import {
   mergeSelf,
   pageRooms,
   playInWorker,
+  project,
 } from '@moddio/client/browser';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
+// Acquire the visible overlay with alpha enabled so Pixi's static layer can show through when
+// The Pixi prototype is enabled. Canvas2D baseline mode still paints its opaque background each frame.
+canvas.getContext('2d', { alpha: true });
+// PixiJS is an optional renderer prototype. It lives on a separate, non-interactive canvas
+// beneath the existing Canvas2D input/HUD layer, so it cannot take over the modd.io controls.
+const pixiCanvas = document.createElement('canvas');
+pixiCanvas.id = 'pixi-world';
+pixiCanvas.style.position = 'fixed';
+pixiCanvas.style.inset = '0';
+pixiCanvas.style.width = '100vw';
+pixiCanvas.style.height = '100vh';
+pixiCanvas.style.pointerEvents = 'none';
+pixiCanvas.style.zIndex = '0';
+pixiCanvas.style.display = 'none';
+document.body.insertBefore(pixiCanvas, canvas);
+canvas.style.position = 'fixed';
+canvas.style.inset = '0';
+canvas.style.zIndex = '1';
+canvas.style.background = 'transparent';
 const view = canvas2d(canvas);
 const keys = controls(canvas, { buttons: [{ key: 'f', label: 'FIRE / PUNCH' }, { key: 'e', label: 'PICK UP' }, { key: 'g', label: 'DROP' }, { key: ' ', label: 'SMASH' }, { key: 'm', label: 'MENU' }] });
+let pixiApp: PixiApplication | null = null;
+let pixiWorldContainer: PixiContainer | null = null;
+let pixiAvailable = false;
+let pixiPrototypeEnabled = false;
+let pixiInitPromise: Promise<boolean> | null = null;
+let pixiStatus = 'CANVAS2D BASELINE';
+let pixiNotice = '';
+let pixiNoticeUntil = 0;
+let pixiRendererWidth = 0;
+let pixiRendererHeight = 0;
 
 const TILE = 64;
 const COLS = 42;
@@ -47,6 +79,11 @@ let latestLocalAimAngle = 0;
 let activePlayerId = '';
 let debugOverlayEnabled = false;
 let collisionDebugEnabled = false;
+let latestLocalPlayerName = '';
+let latestMapProps: any[] = [];
+let tiledExportButtonBounds: { x: number; y: number; w: number; h: number } | null = null;
+let tiledExportStatus = 'READY';
+let tiledExportBusy = false;
 let lastLocalShotTokenRequested = 0;
 let lastLocalShotAt = 0;
 let lastLocalShotWeapon = -1;
@@ -397,6 +434,139 @@ const floorMapContext = floorMapCache.getContext('2d');
 if (floorMapContext) {
   floorMapContext.imageSmoothingEnabled = false;
   drawFloorLayer(floorMapContext, 0, 0, WORLD_W, WORLD_H);
+}
+
+function pixiHex(value: string): number {
+  const parsed = Number.parseInt(String(value || '').replace('#', ''), 16);
+  return Number.isFinite(parsed) ? parsed : 0x6c6153;
+}
+
+function buildPixiStaticWorld(): PixiContainer {
+  const root = new PixiContainer();
+  // Reuse the exact cached 2D floor artwork: the prototype changes its renderer, not map data.
+  const floorTexture = PixiTexture.from(floorMapCache);
+  try { (floorTexture.source as any).scaleMode = 'nearest'; } catch {}
+  const floorSprite = new PixiSprite(floorTexture);
+  floorSprite.x = 0; floorSprite.y = 0;
+  floorSprite.width = WORLD_W; floorSprite.height = WORLD_H;
+  root.addChild(floorSprite);
+
+  // Static buildings are represented by batched PixiJS Graphics. Their positions and dimensions
+  // use the existing BUILDINGS array that also feeds the Canvas renderer and map exporter.
+  const buildings = new PixiGraphics();
+  for (const b of BUILDINGS) {
+    buildings.roundRect(b.x + 8, b.y + 10, b.w, b.h, 10).fill({ color: 0x161f22, alpha: 0.24 });
+    buildings.roundRect(b.x, b.y, b.w, b.h, 9).fill({ color: 0x6c6153 });
+    buildings.roundRect(b.x + 5, b.y + 5, b.w - 10, b.h - 10, 7).fill({ color: pixiHex(b.color) });
+    buildings.roundRect(b.x + 10, b.y + 9, b.w - 20, 22, 5).fill({ color: 0xfff8da, alpha: 0.26 });
+    const windowCols = Math.max(2, Math.floor((b.w - 24) / 34));
+    for (let i = 0; i < windowCols; i++) {
+      const wx = b.x + 12 + i * ((b.w - 28) / windowCols);
+      for (let wy = b.y + 46; wy < b.y + b.h - 12; wy += 35) {
+        buildings.roundRect(wx, wy, 17, 19, 3).fill({ color: 0x1a2d30, alpha: 0.62 });
+      }
+    }
+    buildings.roundRect(b.x + 4, b.y + 4, b.w - 8, b.h - 8, 7)
+      .stroke({ color: 0xffffff, alpha: 0.3, width: 2 });
+  }
+  root.addChild(buildings);
+  return root;
+}
+
+async function ensurePixiRenderer(): Promise<boolean> {
+  if (pixiAvailable && pixiApp && pixiWorldContainer) return true;
+  if (pixiInitPromise) return pixiInitPromise;
+  pixiInitPromise = (async () => {
+    let initializingApp: PixiApplication | null = null;
+    try {
+      const app = new PixiApplication();
+      initializingApp = app;
+      await app.init({
+        canvas: pixiCanvas,
+        width: Math.max(1, view.width),
+        height: Math.max(1, view.height),
+        backgroundAlpha: 0,
+        clearBeforeRender: true,
+        autoStart: false,
+        antialias: false,
+        autoDensity: false,
+        resolution: 1,
+        preference: 'webgl',
+        powerPreference: 'high-performance',
+      });
+      app.stop();
+      const world = buildPixiStaticWorld();
+      app.stage.addChild(world);
+      pixiApp = app;
+      pixiWorldContainer = world;
+      pixiRendererWidth = Math.max(1, view.width);
+      pixiRendererHeight = Math.max(1, view.height);
+      pixiAvailable = true;
+      pixiStatus = 'PIXIJS STATIC WORLD READY';
+      return true;
+    } catch (error) {
+      pixiCanvas.style.display = 'none';
+      pixiAvailable = false;
+      pixiPrototypeEnabled = false;
+      pixiStatus = 'PIXI INIT FAILED · CANVAS2D FALLBACK';
+      pixiNotice = 'PixiJS unavailable; Canvas2D renderer remains active';
+      pixiNoticeUntil = performance.now() + 4000;
+      try { (initializingApp as any)?.destroy({ removeView: false }, { children: true, texture: false, textureSource: false, context: true }); } catch {}
+      pixiApp = null;
+      pixiWorldContainer = null;
+      console.warn('Chaos City.io PixiJS prototype could not initialize; using Canvas2D.', error);
+      return false;
+    } finally {
+      pixiInitPromise = null;
+    }
+  })();
+  return pixiInitPromise;
+}
+
+async function togglePixiRendererPrototype(): Promise<void> {
+  if (pixiPrototypeEnabled) {
+    pixiPrototypeEnabled = false;
+    pixiCanvas.style.display = 'none';
+    pixiStatus = 'CANVAS2D BASELINE';
+    pixiNotice = 'Canvas2D baseline renderer';
+    pixiNoticeUntil = performance.now() + 2500;
+    return;
+  }
+  pixiStatus = 'INITIALIZING PIXIJS…';
+  pixiNotice = 'Initializing PixiJS static-world prototype…';
+  pixiNoticeUntil = performance.now() + 3500;
+  const ready = await ensurePixiRenderer();
+  if (!ready) return;
+  pixiPrototypeEnabled = true;
+  pixiCanvas.style.display = 'block';
+  pixiStatus = 'PIXIJS STATIC WORLD + CANVAS2D ENTITIES';
+  pixiNotice = 'PixiJS static world enabled · N to switch back';
+  pixiNoticeUntil = performance.now() + 3000;
+}
+
+function renderPixiStaticWorld(camX: number, camY: number, zoom: number): boolean {
+  if (!pixiPrototypeEnabled || !pixiApp || !pixiWorldContainer) return false;
+  try {
+    const width = Math.max(1, view.width), height = Math.max(1, view.height);
+    if (width !== pixiRendererWidth || height !== pixiRendererHeight) {
+      pixiApp.renderer.resize(width, height);
+      pixiRendererWidth = width;
+      pixiRendererHeight = height;
+    }
+    pixiWorldContainer.scale.set(zoom, zoom);
+    pixiWorldContainer.position.set(-camX * zoom, -camY * zoom);
+    pixiApp.render();
+    pixiCanvas.style.display = 'block';
+    return true;
+  } catch (error) {
+    console.warn('PixiJS render failed; returning to Canvas2D.', error);
+    pixiPrototypeEnabled = false;
+    pixiCanvas.style.display = 'none';
+    pixiStatus = 'PIXI RENDER ERROR · CANVAS2D FALLBACK';
+    pixiNotice = 'PixiJS render failed; Canvas2D restored';
+    pixiNoticeUntil = performance.now() + 4000;
+    return false;
+  }
 }
 
 function drawWallsLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:number;w:number;h:number}): void {
@@ -764,6 +934,8 @@ function drawGame(state: any, self: any, playerId: string): void {
   const s: any = mergeSelf(state, self, 'players', playerId);
   if (!s || !s.players || !s.players[playerId]) return;
   const mine = s.players[playerId];
+  latestLocalPlayerName = String(mine.name || '').trim();
+  latestMapProps = Array.isArray(s.props) ? s.props.slice() : [];
   seedLocalShotTokenBaseline(mine);
   const renderNow = performance.now();
   latestLocalInventory = Array.isArray(mine.inventory) ? mine.inventory.slice() : [0, null, null, null, null];
@@ -782,14 +954,25 @@ function drawGame(state: any, self: any, playerId: string): void {
   aimCameraReady = true;
   const visible = { x: camX, y: camY, w: visibleW, h: visibleH };
 
+  const usingPixiStaticWorld = renderPixiStaticWorld(camX, camY, zoom);
+  if (usingPixiStaticWorld) {
+    // Main Canvas2D layer stays transparent so Pixi owns only the static floor/buildings.
+    // Input, HUD, dynamic props, trees, players, bullets, particles and debug overlays remain here.
+    ctx.clearRect(0, 0, view.width, view.height);
+  } else {
+    pixiCanvas.style.display = 'none';
+  }
+
   ctx.save(); ctx.scale(zoom, zoom); ctx.translate(-camX, -camY);
   ctx.imageSmoothingEnabled = false;
-  if (floorMapCache.width > 0 && floorMapContext) {
-    ctx.drawImage(floorMapCache, camX, camY, visibleW, visibleH, camX, camY, visibleW, visibleH);
-  } else {
-    drawFloorLayer(ctx, camX, camY, visibleW, visibleH);
+  if (!usingPixiStaticWorld) {
+    if (floorMapCache.width > 0 && floorMapContext) {
+      ctx.drawImage(floorMapCache, camX, camY, visibleW, visibleH, camX, camY, visibleW, visibleH);
+    } else {
+      drawFloorLayer(ctx, camX, camY, visibleW, visibleH);
+    }
+    drawWallsLayer(ctx, visible);
   }
-  drawWallsLayer(ctx, visible);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
   // All visible projectiles use the same authoritative source on local and remote clients.
@@ -875,10 +1058,16 @@ canvas.addEventListener('pointerdown', (event: PointerEvent) => {
   const y = event.clientY - rect.top;
   if (event.pointerType === 'touch' && x < view.width / 2) return; // left touch zone is the move stick
   const clickedInventory = weaponSlotAt(x, y) >= 0;
-  // Mark the pointer state from the DOM event itself. This is more reliable than inferring a new
-  // press from a sampled `mouse.down` value, especially after quick release/re-press sequences.
+  const clickedTiledExport = pointInExportButton(x, y);
+  // UI presses must never leak into the fire input. The Tiled export button is additionally
+  // gated to the exact owner username, `free2win`.
   physicalMouseWasDown = true;
-  suppressCurrentMousePress = clickedInventory;
+  suppressCurrentMousePress = clickedInventory || clickedTiledExport;
+  if (clickedTiledExport) {
+    pendingMouseFirePulse = false;
+    void exportTiledMap();
+    return;
+  }
   if (!clickedInventory) pendingMouseFirePulse = true;
 }, { passive: true });
 window.addEventListener('pointerup', () => {
@@ -1084,7 +1273,7 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
 
   if (!keys.touch) {
     ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 292, 24, 8);
-    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · EMPTY SLOT: PUNCH · F3 DIAG · F4 HITBOX', 24, h - 22, 272);
+    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · F3 DIAG · F4 HITBOX · N PIXI TEST', 24, h - 22, 272);
   }
   const nearestWorldPickup = (state.pickups || []).some((pickup: any) => {
     const dx = pickup.x - mine.x, dy = pickup.y - mine.y;
@@ -1111,9 +1300,19 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('PING / MS', metricsX + 9, 58);
   ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'right'; ctx.fillText(displayedPingMs == null ? '--' : String(displayedPingMs), metricsX + metricsW - 9, 58);
   drawMiniMap(ctx, mine);
+  if (pixiNotice && performance.now() < pixiNoticeUntil) {
+    const noticeW = Math.min(view.width - 24, 360);
+    const noticeX = (view.width - noticeW) / 2;
+    const noticeY = Math.max(12, view.height - (keys.touch ? 220 : 174));
+    ctx.fillStyle = 'rgba(8,18,23,.92)'; roundRect(ctx, noticeX, noticeY, noticeW, 28, 8);
+    ctx.strokeStyle = 'rgba(123,244,174,.62)'; ctx.lineWidth = 1; strokeRoundRect(ctx, noticeX + .5, noticeY + .5, noticeW - 1, 27, 8);
+    ctx.fillStyle = '#e8fff1'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(pixiNotice, view.width / 2, noticeY + 18, noticeW - 14);
+  }
 }
 
 function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
+  tiledExportButtonBounds = null;
   if (!debugOverlayEnabled) return;
   const screenW = view.width, screenH = view.height;
   const panelW = Math.min(370, screenW - 24);
@@ -1131,6 +1330,7 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   const resolvedToken = finiteMetric(mine.lastResolvedClientShotToken);
   const queued = Array.isArray(mine.pendingShots) ? mine.pendingShots.length : 0;
   const mismatch = netDiagnostics.desyncDisagreed;
+  lines.push(`RENDERER ${pixiStatus} · N / F6 TO TOGGLE PROTOTYPE`);
   lines.push(`PREDICTION ${netDiagnostics.mode} · local player predicted, room authoritative`);
   lines.push(`RECONCILIATION SDK rollback/replay · self prediction`);
   lines.push(`REMOTE BUFFER SDK interpolation · no second custom buffer`);
@@ -1148,6 +1348,7 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   lines.push(`LAST LOCAL SHOT ${lastLocalShotWeapon >= 0 ? WEAPON_NAMES[lastLocalShotWeapon] : '--'} · ${lastLocalShotAt ? ((performance.now() - lastLocalShotAt) / 1000).toFixed(1) + 's ago' : '--'}`);
   lines.push(`INVENTORY ${inventoryLabel || '--'}`);
   lines.push(`HITBOX DEBUG ${collisionDebugEnabled ? 'ON · F4 TO HIDE' : 'OFF · F4 TO SHOW'}`);
+  if (isTiledExportOwner(mine.name)) lines.splice(5, 0, `TILED EXPORT ${tiledExportStatus}`);
   const shotTrace: any[] = Array.isArray(state.shotTrace) ? state.shotTrace.slice(-3).reverse() : [];
   for (const event of shotTrace) {
     const ownerName = String(state.players?.[event.owner]?.name || event.owner || '?').slice(0, 8);
@@ -1165,7 +1366,18 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   ctx.strokeStyle = mismatch != null && mismatch > 0 ? '#ff6b67' : 'rgba(123,244,174,.72)';
   ctx.lineWidth = 1.5; strokeRoundRect(ctx, x + 0.5, y + 0.5, panelW - 1, panelH - 1, 10);
   ctx.textAlign = 'left'; ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 11px system-ui';
-  ctx.fillText('MULTIPLAYER DIAGNOSTICS  ·  F3 TO HIDE', x + 10, y + 17, panelW - 20);
+  if (isTiledExportOwner(mine.name)) {
+    const buttonW = Math.min(118, Math.max(90, panelW * 0.32));
+    tiledExportButtonBounds = { x: x + panelW - buttonW - 7, y: y + 4, w: buttonW, h: 20 };
+    ctx.fillText('MULTIPLAYER DIAGNOSTICS', x + 10, y + 17, Math.max(70, tiledExportButtonBounds.x - x - 18));
+    ctx.fillStyle = tiledExportBusy ? '#596a6c' : '#176c46';
+    roundRect(ctx, tiledExportButtonBounds.x, tiledExportButtonBounds.y, tiledExportButtonBounds.w, tiledExportButtonBounds.h, 6);
+    ctx.strokeStyle = '#8bf2b8'; ctx.lineWidth = 1; strokeRoundRect(ctx, tiledExportButtonBounds.x + 0.5, tiledExportButtonBounds.y + 0.5, tiledExportButtonBounds.w - 1, tiledExportButtonBounds.h - 1, 6);
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(tiledExportBusy ? 'EXPORTING…' : 'EXPORT TILED MAP', tiledExportButtonBounds.x + tiledExportButtonBounds.w / 2, tiledExportButtonBounds.y + 13, tiledExportButtonBounds.w - 8);
+  } else {
+    ctx.fillText('MULTIPLAYER DIAGNOSTICS  ·  F3 TO HIDE', x + 10, y + 17, panelW - 20);
+  }
   ctx.font = screenH < 480 ? '9px ui-monospace, monospace' : '10px ui-monospace, monospace';
   visibleLines.forEach((line, i) => {
     const isWarn = (line.startsWith('DESYNC') && mismatch != null && mismatch > 0)
@@ -1175,6 +1387,312 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
     ctx.fillText(line, x + 10, y + 34 + i * lineH, panelW - 20);
   });
   ctx.restore();
+}
+
+// Tiled map export is intentionally gated to the modd.io account name `free2win`.
+// The portable ZIP contains the full visual map plus editable geometry/collision objects.
+const TILED_EXPORT_OWNER = 'free2win';
+function isTiledExportOwner(name: any): boolean {
+  return String(name || '').trim().toLowerCase() === TILED_EXPORT_OWNER;
+}
+function tiledProperties(items: Array<{ name: string; type: string; value: any }>): any[] {
+  return items.map((item) => ({ name: item.name, type: item.type, value: item.value }));
+}
+function tiledRectObject(id: number, name: string, className: string, x: number, y: number, w: number, h: number, properties: any[] = [], visible = true): any {
+  return { id, name, class: className, type: className, x, y, width: w, height: h, rotation: 0, visible, properties };
+}
+function isPatchCell(tx: number, ty: number): boolean {
+  return (tx >= 13 && tx <= 16 && ty >= 19 && ty <= 22) || ((tx + ty * 2) % 19 === 0);
+}
+function mapPropHome(p: any): { x: number; y: number } {
+  const x = Number.isFinite(Number(p?.mapX)) ? Number(p.mapX) : Number(p?.x) || 0;
+  const y = Number.isFinite(Number(p?.mapY)) ? Number(p.mapY) : Number(p?.y) || 0;
+  return { x, y };
+}
+function buildTiledMap(propsForMap: any[], portableImages: boolean): any {
+  const floor: number[] = [];
+  const floor2: number[] = [];
+  for (let ty = 0; ty < ROWS; ty++) {
+    for (let tx = 0; tx < COLS; tx++) {
+      const road = isRoadCell(tx, ty);
+      floor.push(road ? 0 : ((tx * 2 + ty) % 3) + 1);
+      if (road) floor2.push(0); // the map background colour is clean, unmarked asphalt
+      else if (isSidewalkCell(tx, ty)) floor2.push(6 + ((tx + ty) % 3) + 1);
+      else if (isPatchCell(tx, ty)) floor2.push(3 + ((tx + ty) % 3) + 1);
+      else floor2.push(0);
+    }
+  }
+
+  const layers: any[] = [
+    { id: 1, name: 'floor', type: 'tilelayer', x: 0, y: 0, width: COLS, height: ROWS, opacity: 1, visible: true, data: floor },
+    { id: 2, name: 'floor2', type: 'tilelayer', x: 0, y: 0, width: COLS, height: ROWS, opacity: 1, visible: true, data: floor2 },
+  ];
+  let nextObjectId = 1;
+  let nextLayerId = 3;
+
+  const buildingObjects = BUILDINGS.map((b, i) => tiledRectObject(
+    nextObjectId++, `Building ${String(i + 1).padStart(2, '0')}`, 'Building', b.x, b.y, b.w, b.h,
+    tiledProperties([
+      { name: 'collision', type: 'bool', value: true },
+      { name: 'color', type: 'string', value: b.color },
+      { name: 'style', type: 'int', value: b.style },
+      { name: 'source', type: 'string', value: 'Chaos City.io BUILDINGS data' },
+    ]), !portableImages,
+  ));
+
+  const propObjects = propsForMap.map((p: any, i: number) => {
+    const home = mapPropHome(p);
+    const box = propHitbox(String(p.kind || 'bin'));
+    const hp = p.kind === 'car' ? 200 : 20;
+    return tiledRectObject(
+      nextObjectId++, `${String(p.kind || 'prop').toUpperCase()} ${String(p.id ?? i)}`, 'MapProp',
+      home.x - box.hx, home.y - box.hy, box.hx * 2, box.hy * 2,
+      tiledProperties([
+        { name: 'kind', type: 'string', value: String(p.kind || 'bin') },
+        { name: 'variant', type: 'int', value: Number(p.variant) || 0 },
+        { name: 'initialHP', type: 'int', value: hp },
+        { name: 'collision', type: 'bool', value: true },
+        { name: 'mapX', type: 'float', value: home.x },
+        { name: 'mapY', type: 'float', value: home.y },
+      ]), !portableImages,
+    );
+  });
+
+  if (portableImages) {
+    layers.push({
+      id: nextLayerId++, name: 'walls', type: 'imagelayer', x: 0, y: 0, opacity: 1, visible: true,
+      image: 'assets/tiled/walls.png', imagewidth: WORLD_W, imageheight: WORLD_H,
+      offsetx: 0, offsety: 0, repeatx: false, repeaty: false, startx: 0, starty: 0,
+    });
+    layers.push({
+      id: nextLayerId++, name: 'props', type: 'imagelayer', x: 0, y: 0, opacity: 1, visible: true,
+      image: 'assets/tiled/props.png', imagewidth: WORLD_W, imageheight: WORLD_H,
+      offsetx: 0, offsety: 0, repeatx: false, repeaty: false, startx: 0, starty: 0,
+    });
+  } else {
+    // The editable project-preview map omits generated PNG layers, so it can be saved using the
+    // SDK's data-file-only project.saveFile API. Rectangles preserve all building/prop geometry.
+    layers.push({ id: nextLayerId++, name: 'walls', type: 'objectgroup', draworder: 'topdown', opacity: 1, visible: true, x: 0, y: 0, objects: buildingObjects });
+    layers.push({ id: nextLayerId++, name: 'props', type: 'objectgroup', draworder: 'topdown', opacity: 1, visible: true, x: 0, y: 0, objects: propObjects });
+  }
+
+  const treeObjects: any[] = [];
+  for (let i = 0; i < TREES.length; i++) {
+    const t = TREES[i];
+    treeObjects.push({
+      id: nextObjectId++, name: `Tree ${String(i + 1).padStart(2, '0')}`, class: 'Tree', type: 'Tree', gid: 541,
+      x: t.x - TREE_HALF, y: t.y + TREE_HALF, width: TREE_SIZE, height: TREE_SIZE, rotation: 0, visible: true,
+      properties: tiledProperties([
+        { name: 'trunkHitbox', type: 'string', value: '15x15 pixels' },
+        { name: 'trunkRadius', type: 'float', value: 7.5 },
+        { name: 'collision', type: 'bool', value: true },
+      ]),
+    });
+  }
+  layers.push({ id: nextLayerId++, name: 'trees', type: 'objectgroup', draworder: 'topdown', opacity: 1, visible: true, x: 0, y: 0, objects: treeObjects });
+
+  if (portableImages) {
+    layers.push({ id: nextLayerId++, name: 'wall-collisions', type: 'objectgroup', draworder: 'topdown', opacity: 1, visible: false, x: 0, y: 0, objects: buildingObjects });
+    layers.push({
+      id: nextLayerId++, name: 'tree-collisions', type: 'objectgroup', draworder: 'topdown', opacity: 1, visible: false, x: 0, y: 0,
+      objects: TREES.map((t, i) => ({
+        id: nextObjectId++, name: `Tree trunk ${String(i + 1).padStart(2, '0')}`, class: 'TreeCollider', type: 'TreeCollider',
+        x: t.x - 7.5, y: t.y - 7.5, width: 15, height: 15, ellipse: true, rotation: 0, visible: false,
+        properties: tiledProperties([{ name: 'collision', type: 'bool', value: true }, { name: 'shape', type: 'string', value: 'circle' }]),
+      })),
+    });
+    layers.push({ id: nextLayerId++, name: 'prop-collisions-and-data', type: 'objectgroup', draworder: 'topdown', opacity: 1, visible: false, x: 0, y: 0, objects: propObjects });
+  } else {
+    layers.push({
+      id: nextLayerId++, name: 'tree-collisions', type: 'objectgroup', draworder: 'topdown', opacity: 1, visible: false, x: 0, y: 0,
+      objects: TREES.map((t, i) => ({
+        id: nextObjectId++, name: `Tree trunk ${String(i + 1).padStart(2, '0')}`, class: 'TreeCollider', type: 'TreeCollider',
+        x: t.x - 7.5, y: t.y - 7.5, width: 15, height: 15, ellipse: true, rotation: 0, visible: false,
+        properties: tiledProperties([{ name: 'collision', type: 'bool', value: true }, { name: 'shape', type: 'string', value: 'circle' }]),
+      })),
+    });
+  }
+
+  const imageRoot = portableImages ? 'assets/' : '../assets/';
+  return {
+    compressionlevel: -1,
+    height: ROWS,
+    width: COLS,
+    infinite: false,
+    layers,
+    nextlayerid: nextLayerId,
+    nextobjectid: nextObjectId,
+    orientation: 'orthogonal',
+    renderorder: 'right-down',
+    tiledversion: '1.11.0',
+    tileheight: TILE,
+    tilewidth: TILE,
+    type: 'map',
+    version: '1.10',
+    parallaxoriginx: 0,
+    parallaxoriginy: 0,
+    backgroundcolor: '#484b4d',
+    properties: tiledProperties([
+      { name: 'game', type: 'string', value: 'Chaos City.io' },
+      { name: 'worldWidthPixels', type: 'int', value: WORLD_W },
+      { name: 'worldHeightPixels', type: 'int', value: WORLD_H },
+      { name: 'roadMarkings', type: 'bool', value: false },
+      { name: 'exportedBy', type: 'string', value: 'Chaos City.io F3 Tiled exporter' },
+    ]),
+    tilesets: [
+      {
+        firstgid: 1, name: 'Chaos City Tilesheet', type: 'tileset', version: '1.10',
+        tilewidth: 64, tileheight: 64, tilecount: 540, columns: 27, image: `${imageRoot}tilesheet_complete.png`,
+        imagewidth: 1728, imageheight: 1280, margin: 0, spacing: 0,
+      },
+      {
+        firstgid: 541, name: 'Chaos City Trees', type: 'tileset', version: '1.10',
+        tilewidth: 128, tileheight: 128, tilecount: 1, columns: 1, image: `${imageRoot}trees/tree.png`,
+        imagewidth: 128, imageheight: 128, margin: 0, spacing: 0, objectalignment: 'bottomleft',
+      },
+    ],
+  };
+}
+function canvasPngBytes(source: HTMLCanvasElement): Uint8Array {
+  const dataUrl = source.toDataURL('image/png');
+  const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+function imagePngBytes(image: HTMLImageElement): Uint8Array {
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  if (!width || !height) throw new Error('A required map image did not load.');
+  const c = document.createElement('canvas'); c.width = width; c.height = height;
+  const cctx = c.getContext('2d');
+  if (!cctx) throw new Error('Could not prepare map image.');
+  cctx.imageSmoothingEnabled = false; cctx.drawImage(image, 0, 0);
+  return canvasPngBytes(c);
+}
+function renderWallsPngBytes(): Uint8Array {
+  const c = document.createElement('canvas'); c.width = WORLD_W; c.height = WORLD_H;
+  const cctx = c.getContext('2d');
+  if (!cctx) throw new Error('Could not render the wall layer.');
+  cctx.clearRect(0, 0, WORLD_W, WORLD_H); cctx.imageSmoothingEnabled = false;
+  drawWallsLayer(cctx, { x: 0, y: 0, w: WORLD_W, h: WORLD_H });
+  return canvasPngBytes(c);
+}
+function renderPropsPngBytes(propsForMap: any[]): Uint8Array {
+  const c = document.createElement('canvas'); c.width = WORLD_W; c.height = WORLD_H;
+  const cctx = c.getContext('2d');
+  if (!cctx) throw new Error('Could not render the props layer.');
+  cctx.clearRect(0, 0, WORLD_W, WORLD_H); cctx.imageSmoothingEnabled = false;
+  for (let i = 0; i < propsForMap.length; i++) {
+    const p = propsForMap[i];
+    const home = mapPropHome(p);
+    drawProp(cctx, { ...p, x: home.x, y: home.y, angle: 0, active: true, id: Number(p.id ?? i) });
+  }
+  return canvasPngBytes(c);
+}
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= bytes[i];
+    for (let bit = 0; bit < 8; bit++) crc = (crc & 1) ? ((crc >>> 1) ^ 0xedb88320) : (crc >>> 1);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function zipStore(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {
+  const encoder = new TextEncoder();
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let localOffset = 0;
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const checksum = crc32(file.data);
+    const local = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, 0, true); lv.setUint16(10, 0, true); lv.setUint16(12, 0, true);
+    lv.setUint32(14, checksum, true); lv.setUint32(18, file.data.length, true); lv.setUint32(22, file.data.length, true);
+    lv.setUint16(26, nameBytes.length, true); lv.setUint16(28, 0, true); local.set(nameBytes, 30);
+    localParts.push(local, file.data);
+
+    const central = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true); cv.setUint16(10, 0, true); cv.setUint16(12, 0, true); cv.setUint16(14, 0, true);
+    cv.setUint32(16, checksum, true); cv.setUint32(20, file.data.length, true); cv.setUint32(24, file.data.length, true);
+    cv.setUint16(28, nameBytes.length, true); cv.setUint16(30, 0, true); cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true); cv.setUint16(36, 0, true); cv.setUint32(38, 0, true); cv.setUint32(42, localOffset, true);
+    central.set(nameBytes, 46); centralParts.push(central);
+    localOffset += local.length + file.data.length;
+  }
+  const centralOffset = localOffset;
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const end = new Uint8Array(22); const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(4, 0, true); ev.setUint16(6, 0, true);
+  ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, centralSize, true); ev.setUint32(16, centralOffset, true); ev.setUint16(20, 0, true);
+  const all = [...localParts, ...centralParts, end];
+  const total = all.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total); let at = 0;
+  for (const part of all) { out.set(part, at); at += part.length; }
+  return out;
+}
+function requestBrowserDownload(data: Uint8Array, filename: string): void {
+  const blob = new Blob([data], { type: 'application/zip' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.style.display = 'none';
+  document.body.appendChild(a); a.click(); a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+async function exportTiledMap(): Promise<void> {
+  if (!isTiledExportOwner(latestLocalPlayerName)) {
+    tiledExportStatus = 'LOCKED';
+    return;
+  }
+  if (tiledExportBusy) return;
+  tiledExportBusy = true;
+  tiledExportStatus = 'BUILDING MAP…';
+  try {
+    const propsForMap = latestMapProps.length ? latestMapProps : [];
+    const portableMap = buildTiledMap(propsForMap, true);
+    const projectMap = buildTiledMap(propsForMap, false);
+    const encoder = new TextEncoder();
+    const files = [
+      { name: 'ChaosCity_Tiled_Export/chaos-city.tmj', data: encoder.encode(JSON.stringify(portableMap, null, 2)) },
+      { name: 'ChaosCity_Tiled_Export/README.txt', data: encoder.encode(
+        'Chaos City.io Tiled export\r\n\r\nOpen chaos-city.tmj in Tiled. Keep the assets folder next to the map file.\r\nThe map is 42 x 42 tiles, 64 x 64 pixels per tile (2688 x 2688 pixels).\r\nLayers: floor, floor2, walls, props, trees, wall-collisions, tree-collisions, prop-collisions-and-data.\r\nRoads intentionally use a flat dark background and have no lane markings.\r\nHidden collision layers contain building, tree-trunk, and prop collision geometry.\r\nThis export was initiated in-game by free2win.\r\n'
+      ) },
+      { name: 'ChaosCity_Tiled_Export/assets/tilesheet_complete.png', data: imagePngBytes(atlas) },
+      { name: 'ChaosCity_Tiled_Export/assets/trees/tree.png', data: imagePngBytes(treeSprite) },
+      { name: 'ChaosCity_Tiled_Export/assets/tiled/walls.png', data: renderWallsPngBytes() },
+      { name: 'ChaosCity_Tiled_Export/assets/tiled/props.png', data: renderPropsPngBytes(propsForMap) },
+    ];
+    const zipBytes = zipStore(files);
+    // Initiate the browser download directly from the owner's click gesture.
+    requestBrowserDownload(zipBytes, 'ChaosCity_Tiled_Export.zip');
+    tiledExportStatus = 'ZIP EXPORT REQUESTED';
+
+    // On the owner's editable draft preview, also save a fully editable .tmj into the project.
+    // The project export references existing assets and uses object layers for editable geometry.
+    try {
+      const save = await (project as any)?.saveFile?.('maps/chaos-city-export.tmj', JSON.stringify(projectMap, null, 2));
+      if (save?.ok) tiledExportStatus = 'TMJ SAVED TO PROJECT + ZIP REQUESTED';
+      else if (save?.code === 'not_preview') tiledExportStatus = 'ZIP REQUESTED · PUBLISHED ROOM: USE EDIT PREVIEW IF DOWNLOAD IS BLOCKED';
+      else if (save?.code) tiledExportStatus = `ZIP REQUESTED · PROJECT SAVE ${String(save.code).toUpperCase()}`;
+    } catch {
+      tiledExportStatus = 'ZIP REQUESTED · PROJECT SAVE UNAVAILABLE';
+    }
+  } catch (error: any) {
+    tiledExportStatus = `EXPORT FAILED: ${String(error?.message || error).slice(0, 48)}`;
+  } finally {
+    tiledExportBusy = false;
+  }
+}
+function pointInExportButton(x: number, y: number): boolean {
+  const b = tiledExportButtonBounds;
+  return debugOverlayEnabled && isTiledExportOwner(latestLocalPlayerName) && !!b
+    && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
 }
 
 // Menu-only snapshot: the scene is rendered once at half resolution and blurred behind the UI.
@@ -1254,6 +1772,7 @@ function menuButton(ctx: CanvasRenderingContext2D, x:number,y:number,w:number,h:
   if (!disabled) addHit(x, y, w, h, action);
 }
 function drawMenu(): void {
+  pixiCanvas.style.display = 'none';
   const ctx = view.begin('#0a151a');
   const w = view.width, h = view.height;
   menuHits = [];
@@ -1599,6 +2118,7 @@ function appLoop(): void {
   } else if (mode === 'game') {
     if (keys.pressed('f3')) debugOverlayEnabled = !debugOverlayEnabled;
     if (keys.pressed('f4')) collisionDebugEnabled = !collisionDebugEnabled;
+    if (keys.pressed('n') || keys.pressed('f6')) void togglePixiRendererPrototype();
     if (keys.pressed('m')) void enterMenu();
     else if (keys.pressed('mouse0')) {
       const slot = weaponSlotAt(keys.mouse.x, keys.mouse.y);
