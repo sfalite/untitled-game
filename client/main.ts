@@ -20,6 +20,34 @@ const WORLD_W = COLS * TILE;
 const WORLD_H = ROWS * TILE;
 const WEAPON_NAMES = ['GLOCK-17', 'AK-47', 'M249', 'M134 MINIGUN', 'SHOTGUN'];
 const WEAPON_COLORS = ['#ffe07a', '#ffd16a', '#ffb347', '#ff8f53', '#fff0b0'];
+// Exact local muzzle points in the same orientation as drawWeaponLocal/drawWeaponShape.
+// Keep in sync with sim.ts so a rendered barrel and its authoritative shot share an origin.
+const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 22, 25];
+const WEAPON_MUZZLE_SIDE = 8;
+function muzzleWorldPosition(player: any, weaponId: number, aimAngle = Number(player?.aimAngle) || 0): { x: number; y: number } {
+  const forward = WEAPON_MUZZLE_FORWARD[weaponId] ?? WEAPON_MUZZLE_FORWARD[0];
+  return {
+    x: Number(player.x) + Math.cos(aimAngle) * forward - Math.sin(aimAngle) * WEAPON_MUZZLE_SIDE,
+    y: Number(player.y) + Math.sin(aimAngle) * forward + Math.cos(aimAngle) * WEAPON_MUZZLE_SIDE,
+  };
+}
+function visualBulletPosition(bullet: any, players: Record<string, any>): { x: number; y: number } {
+  let x = Number(bullet.x) || 0;
+  let y = Number(bullet.y) || 0;
+  const shooter = players?.[bullet.owner];
+  const age = Number.isFinite(Number(bullet.age)) ? Number(bullet.age) : 99;
+  // A room-confirmed bullet can arrive before the shooter has reached the same interpolation
+  // pose on this client. Blend its first two ticks from the visible muzzle for EVERY shooter,
+  // then fade the correction out. This affects visuals only; server collision/damage stays exact.
+  if (shooter && age < 3 && Number.isFinite(Number(bullet.spawnX)) && Number.isFinite(Number(bullet.spawnY))
+      && Number.isFinite(Number(shooter.x)) && Number.isFinite(Number(shooter.y))) {
+    const muzzle = muzzleWorldPosition(shooter, Number(bullet.weaponId), Number(shooter.aimAngle) || 0);
+    const weight = age <= 1 ? 1 : Math.max(0, (3 - age) / 2);
+    x += (muzzle.x - Number(bullet.spawnX)) * weight;
+    y += (muzzle.y - Number(bullet.spawnY)) * weight;
+  }
+  return { x, y };
+}
 const PLAYER_COLORS = ['#55d6ff', '#ff6b6b', '#ffd166', '#c792ea', '#6ee7a8', '#ff9f43'];
 
 const BUILDINGS = [
@@ -538,8 +566,8 @@ function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: n
   if (!(player.muzzleFlash > 0) || player.shotWeapon !== weaponId) return;
   const alpha = Math.min(1, player.muzzleFlash / 2);
   const radius = weaponId === 3 ? 8 : weaponId === 4 ? 7 : 5.5;
-  const barrelLength = weaponId === 0 ? 27 : weaponId === 3 ? 27 : 25;
-  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(8, -barrelLength);
+  const barrelLength = WEAPON_MUZZLE_FORWARD[weaponId] ?? WEAPON_MUZZLE_FORWARD[0];
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(WEAPON_MUZZLE_SIDE, -barrelLength);
   ctx.fillStyle = '#fff6b0'; ctx.strokeStyle = '#ffac42'; ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(0, -radius * 1.7); ctx.lineTo(radius * 0.42, -radius * 0.42);
@@ -557,12 +585,7 @@ function drawGame(state: any, self: any, playerId: string): void {
   const mine = s.players[playerId];
   updateWeaponAudio(mine);
   updateDeathAudio(s.players, mine, playerId);
-  // In self-prediction mode the local player is drawn a little ahead of the confirmed room state.
-  // Nudge only the first one or two frames of our own bullets by that same prediction delta so the
-  // projectile appears attached to the visible muzzle. Damage and actual trajectories remain server-simulated.
-  const confirmedMine = state?.players?.[playerId];
-  const localBulletDeltaX = confirmedMine && Number.isFinite(confirmedMine.x) ? mine.x - confirmedMine.x : 0;
-  const localBulletDeltaY = confirmedMine && Number.isFinite(confirmedMine.y) ? mine.y - confirmedMine.y : 0;
+  // All players, including the local predicted player, use the same visual muzzle correction below.
   const fit = Math.min(view.width / 960, view.height / 640);
   const zoom = Math.max(0.68, Math.min(1.35, fit * 1.2));
   const visibleW = view.width / zoom;
@@ -585,12 +608,10 @@ function drawGame(state: any, self: any, playerId: string): void {
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
   for (const b of s.bullets || []) {
-    const localRecentShot = b.owner === playerId && Number(b.age || 0) <= 1;
-    const bulletX = b.x + (localRecentShot ? localBulletDeltaX : 0);
-    const bulletY = b.y + (localRecentShot ? localBulletDeltaY : 0);
+    const bulletPos = visualBulletPosition(b, s.players || {});
     ctx.fillStyle = b.color || '#ffd16a';
-    ctx.beginPath(); ctx.arc(bulletX, bulletY, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(255,240,170,.32)'; ctx.beginPath(); ctx.arc(bulletX, bulletY, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(bulletPos.x, bulletPos.y, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,240,170,.32)'; ctx.beginPath(); ctx.arc(bulletPos.x, bulletPos.y, 8, 0, Math.PI * 2); ctx.fill();
   }
   for (const p of s.particles || []) {
     const alpha = Math.max(0.08, Math.min(1, p.life / 25));
