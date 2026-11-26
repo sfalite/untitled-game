@@ -137,3 +137,10 @@ Test in the modd.io browser after running `npx moddio test` and `npx moddio dev`
 - Reduced all non-car prop HP to 20. Parked cars remain at 200 HP. Client health-bar maximums use the same values so ratios and damage bars remain consistent.
 - Simulation version bumped to 17.
 - Local TypeScript/source checks are included in this update's test report. Official `npx moddio test` and live-browser multiplayer validation remain necessary.
+
+
+## Update v17 — projectile collision visual fix
+
+Provisional local tracers now run continuous collision checks against buildings, tree trunks, dynamic props, and other players before each draw. Confirmed projectiles are no longer extrapolated forward beyond the authoritative/interpolated simulation position, preventing visual tracers from continuing through obstacles because of interpolation delay. Projectile damage and removal remain server-authoritative. Simulation version is 21.
+
+Local TypeScript and collision-helper tests passed. The official modd.io test and a live multiplayer browser test still need to be run after installation.

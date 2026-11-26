@@ -463,7 +463,7 @@ function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '20',
+  version: '21',
   tickRate: 20,
   maxPlayers: 32,
   // Predict only the local player. The SDK interpolates remote players from authoritative

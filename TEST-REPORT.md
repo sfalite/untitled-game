@@ -138,3 +138,17 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3`,
 ### Not performed
 - Official `npx moddio test`, `npx moddio play`, and the actual Planck adapter inside the modd.io runtime.
 - Live browser multiplayer test with two clients. The client-side tracer and sound should reduce perceived local feedback delay, but authoritative hit confirmation and real network ping still depend on the connection and server region.
+
+
+## Update v17 — projectile collision rendering fix
+
+### Local checks performed
+- TypeScript no-emit compilation passed for `sim.ts`, `server.ts`, and `client/main.ts` using temporary ambient declarations for the SDK modules.
+- Added continuous client-side segment clipping for provisional tracers against the same building AABBs, 15px tree-trunk circles, prop boxes (with rotation), and player hitboxes used by the simulation. This is render-only; the simulation remains responsible for damage and removing projectiles.
+- Removed forward extrapolation of confirmed bullet positions. Confirmed projectiles are now drawn at their interpolated authoritative coordinates and their last movement segment is clipped before drawing, so a stale snapshot cannot render a tracer ahead through a wall.
+- A test harness extracted the actual collision helper functions from `client/main.ts`; wall crossing, clear path, tree trunk, crate, and player sweep tests passed.
+- Confirmed `sim.ts` still removes authoritative bullets on swept collision with buildings, trees, props, and players; simulation version bumped to 21.
+- Package asset paths and ZIP integrity checked.
+
+### Not performed
+- Official `npx moddio test`, `npx moddio play`, or a live browser multiplayer test. Local collision rendering checks do not replace validation in the real modd.io runtime.
