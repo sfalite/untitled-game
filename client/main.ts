@@ -11,15 +11,15 @@ import {
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const view = canvas2d(canvas);
-const keys = controls(canvas, { buttons: [{ key: 'f', label: 'FIRE' }, { key: ' ', label: 'SMASH' }, { key: 'm', label: 'MENU' }] });
+const keys = controls(canvas, { buttons: [{ key: 'f', label: 'FIRE / PUNCH' }, { key: 'e', label: 'PICK UP' }, { key: 'g', label: 'DROP' }, { key: ' ', label: 'SMASH' }, { key: 'm', label: 'MENU' }] });
 
 const TILE = 64;
 const COLS = 42;
 const ROWS = 42;
 const WORLD_W = COLS * TILE;
 const WORLD_H = ROWS * TILE;
-const WEAPON_NAMES = ['AK-47', 'M249', 'M134 MINIGUN', 'SHOTGUN', 'EMPTY HANDS'];
-const WEAPON_COLORS = ['#ffd16a', '#ffb347', '#ff8f53', '#fff0b0', '#73e6a1'];
+const WEAPON_NAMES = ['GLOCK-17', 'AK-47', 'M249', 'M134 MINIGUN', 'SHOTGUN'];
+const WEAPON_COLORS = ['#ffe07a', '#ffd16a', '#ffb347', '#ff8f53', '#fff0b0'];
 const PLAYER_COLORS = ['#55d6ff', '#ff6b6b', '#ffd166', '#c792ea', '#6ee7a8', '#ff9f43'];
 
 const BUILDINGS = [
@@ -183,15 +183,15 @@ function stopAllWeaponAudio(): void {
   lastObservedShotSeq = -1;
 }
 function playShotSound(weapon: number): void {
-  if (weapon === 2) {
+  if (weapon === 3) {
     playPooledShot(minigunVoices, 'minigun');
-  } else if (weapon === 3) {
-    // Keep the shotgun's original sample and timing, as requested.
+  } else if (weapon === 4) {
+    // Keep the shotgun's original sample and timing.
     shotgunAudio.pause();
     try { shotgunAudio.currentTime = 0; } catch {}
     safePlay(shotgunAudio);
   } else {
-    // AK-47 and M249 share the rifle sample, one clean transient per simulated shot.
+    // Glock-17, AK-47 and M249 share the bundled rifle sample until a pistol-specific sample exists.
     playPooledShot(rifleVoices, 'rifle');
   }
 }
@@ -450,12 +450,20 @@ function drawProp(ctx: CanvasRenderingContext2D, p: any): void {
   ctx.restore();
 }
 function drawWeaponShape(ctx: CanvasRenderingContext2D, weapon: number): void {
-  // Weapons are drawn vertically in the sprite's native facing-up orientation.
-  // The caller rotates the character and item together, so the grip never slips off the right hand.
+  // Every weapon is authored muzzle-up in local coordinates. The player renderer rotates
+  // both the equipped item and its grip offset as one transform.
   ctx.fillStyle = '#252c31';
   ctx.strokeStyle = '#151b20';
   ctx.lineWidth = 1.5;
-  if (weapon === 0) { // AK-47
+  if (weapon === 0) { // Glock-17: compact slide and angled grip.
+    ctx.fillStyle = '#1c2327'; roundRect(ctx, -2.1, -18, 4.2, 10, 1.1);
+    ctx.fillStyle = '#465158'; roundRect(ctx, -3.4, -11, 6.8, 7, 1.4);
+    ctx.fillStyle = '#20272b'; roundRect(ctx, -3.7, -5, 7.4, 6, 1.5);
+    ctx.fillStyle = '#303b40'; roundRect(ctx, -2.8, 0, 5.6, 7, 1.2);
+    ctx.fillStyle = '#1c2327'; ctx.beginPath(); ctx.moveTo(-2.5, 5); ctx.lineTo(3.2, 5); ctx.lineTo(4.1, 12); ctx.lineTo(-1.1, 12); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#11181b'; ctx.fillRect(-1.7, -17, 3.4, 2.2);
+    ctx.fillStyle = '#8e989d'; ctx.fillRect(-2.3, -8.8, 4.6, 1.2);
+  } else if (weapon === 1) { // AK-47
     ctx.fillStyle = '#20272b'; roundRect(ctx, -1.7, -29, 3.4, 13, 1.2);
     ctx.fillStyle = '#3c474c'; roundRect(ctx, -3.0, -19, 6.0, 5, 1.5);
     ctx.fillStyle = '#252c31'; roundRect(ctx, -4.0, -15, 8.0, 9, 1.5);
@@ -463,7 +471,7 @@ function drawWeaponShape(ctx: CanvasRenderingContext2D, weapon: number): void {
     ctx.fillStyle = '#a96f3c'; ctx.fillRect(-4.2, -4.5, 2.2, 6.5);
     ctx.fillStyle = '#252c31'; roundRect(ctx, 1.0, -8.5, 3.0, 7.0, 1);
     ctx.fillStyle = '#9b6134'; ctx.fillRect(-2.5, 3, 5, 5);
-  } else if (weapon === 1) { // M249
+  } else if (weapon === 2) { // M249
     ctx.fillStyle = '#20272b'; roundRect(ctx, -2.0, -30, 4.0, 14, 1.2);
     ctx.fillStyle = '#384349'; roundRect(ctx, -4.0, -20, 8.0, 7, 1.5);
     ctx.fillStyle = '#252c31'; roundRect(ctx, -5.0, -14, 10.0, 9, 1.8);
@@ -471,7 +479,7 @@ function drawWeaponShape(ctx: CanvasRenderingContext2D, weapon: number): void {
     ctx.fillStyle = '#252c31'; roundRect(ctx, -5.0, -7, 10.0, 6.0, 1.5);
     ctx.fillStyle = '#8e633f'; roundRect(ctx, -3.2, -1, 6.4, 8, 1.4);
     ctx.fillStyle = '#1d2428'; roundRect(ctx, -6.5, -5, 3.0, 7, 1);
-  } else if (weapon === 2) { // M134 Minigun
+  } else if (weapon === 3) { // M134 Minigun
     ctx.fillStyle = '#20272b';
     for (let i = 0; i < 6; i++) {
       const a = i * Math.PI / 3;
@@ -490,6 +498,24 @@ function drawWeaponShape(ctx: CanvasRenderingContext2D, weapon: number): void {
     ctx.fillStyle = '#a96d39'; ctx.fillRect(-3, 3, 6, 5);
   }
 }
+function drawFistsIcon(ctx: CanvasRenderingContext2D, x: number, y: number, scale = 1, color = '#9cb0ad'): void {
+  ctx.save(); ctx.translate(x, y); ctx.scale(scale, scale);
+  ctx.fillStyle = color; ctx.strokeStyle = '#233239'; ctx.lineWidth = 1.2;
+  roundRect(ctx, -9, -4, 7, 12, 2);
+  roundRect(ctx, 2, -4, 7, 12, 2);
+  roundRect(ctx, -10, -8, 8, 7, 2);
+  roundRect(ctx, 2, -8, 8, 7, 2);
+  ctx.restore();
+}
+function drawWeaponPickup(ctx: CanvasRenderingContext2D, pickup: any): void {
+  ctx.save();
+  ctx.translate(pickup.x, pickup.y);
+  ctx.fillStyle = 'rgba(255,220,115,.15)'; ctx.beginPath(); ctx.arc(0, 0, 21, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,220,115,.85)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2); ctx.stroke();
+  ctx.rotate(Number(pickup.angle) || 0); ctx.scale(.67, .67); ctx.translate(0, 12);
+  drawWeaponShape(ctx, Number(pickup.weaponId));
+  ctx.restore();
+}
 function drawWeaponLocal(ctx: CanvasRenderingContext2D, weapon: number, scale = 1): void {
   ctx.save(); ctx.translate(8, 4); ctx.scale(scale, scale);
   drawWeaponShape(ctx, weapon);
@@ -500,11 +526,12 @@ function drawWeaponIcon(ctx: CanvasRenderingContext2D, x: number, y: number, wea
   drawWeaponShape(ctx, weapon);
   ctx.restore();
 }
-function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any): void {
-  if (!(player.muzzleFlash > 0)) return;
+function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: number): void {
+  if (!(player.muzzleFlash > 0) || player.shotWeapon !== weaponId) return;
   const alpha = Math.min(1, player.muzzleFlash / 2);
-  const radius = player.weapon === 2 ? 8 : player.weapon === 3 ? 7 : 5.5;
-  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(8, -25);
+  const radius = weaponId === 3 ? 8 : weaponId === 4 ? 7 : 5.5;
+  const barrelLength = weaponId === 0 ? 15 : weaponId === 3 ? 27 : 25;
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(8, -barrelLength);
   ctx.fillStyle = '#fff6b0'; ctx.strokeStyle = '#ffac42'; ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(0, -radius * 1.7); ctx.lineTo(radius * 0.42, -radius * 0.42);
@@ -548,6 +575,7 @@ function drawGame(state: any, self: any, playerId: string): void {
   }
   drawWallsLayer(ctx, visible);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
+  for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
   for (const b of s.bullets || []) {
     const localRecentShot = b.owner === playerId && Number(b.age || 0) <= 1;
     const bulletX = b.x + (localRecentShot ? localBulletDeltaX : 0);
@@ -576,10 +604,18 @@ function drawGame(state: any, self: any, playerId: string): void {
     } else {
       ctx.fillStyle = PLAYER_COLORS[p.color % PLAYER_COLORS.length]; ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
     }
-    // Both the gun and the muzzle flash share the same local hand/muzzle anchors as the sprite.
-    if (Number(p.weapon) >= 0 && Number(p.weapon) < 4) {
-      drawWeaponLocal(ctx, p.weapon, 1);
-      drawMuzzleSpark(ctx, p);
+    // The selected field is a slot index; the item in that slot is the actual weapon ID.
+    // Empty slots show fists only: no gun is attached to the player's hand.
+    const equippedWeaponId = Array.isArray(p.inventory) ? p.inventory[p.weapon] : 0;
+    if (typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPON_NAMES.length) {
+      drawWeaponLocal(ctx, equippedWeaponId, 1);
+      drawMuzzleSpark(ctx, p, equippedWeaponId);
+    } else if (p.punchFlash > 0) {
+      // A small fist lunge makes the empty-slot melee action visible to all clients.
+      ctx.save(); ctx.translate(8, -12 - (5 - Math.min(5, p.punchFlash)) * 2);
+      ctx.fillStyle = '#f2c7a2'; roundRect(ctx, -4, -6, 8, 11, 3);
+      ctx.fillStyle = '#d9a985'; roundRect(ctx, -5, -7, 10, 5, 2);
+      ctx.restore();
     }
     ctx.restore();
     ctx.fillStyle = '#16252c'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
@@ -659,7 +695,7 @@ function drawMiniMap(ctx: CanvasRenderingContext2D, mine: any): void {
   const x = w - mapW - 26;
   // The touch controls occupy the lower-right edge, so keep the map in that corner's
   // lower area but just above the control strip, instead of jumping to the top of the screen.
-  const touchControlReserve = keys.touch ? (w < 600 ? 104 : 80) : 0;
+  const touchControlReserve = keys.touch ? (w < 600 ? 232 : 194) : 0;
   const y = h - panelH - 12 - touchControlReserve;
   const mapX = x + 7;
   const mapY = y + headerH + 3;
@@ -728,18 +764,15 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
     ctx.strokeStyle = selected ? '#57ed91' : 'rgba(211,230,225,.28)';
     ctx.lineWidth = selected ? 3 : 1; strokeRoundRect(ctx, x + 1, invY + 1, slotW - 2, slotH - 2, 10);
     ctx.fillStyle = '#b8c8cd'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left'; ctx.fillText(String(i + 1), x + 7, invY + 13);
-    if (i < 4) {
-      drawWeaponIcon(ctx, x + slotW / 2, invY + 27, i, 0.82);
+    const inventory = Array.isArray(mine.inventory) ? mine.inventory : [0, null, null, null, null];
+    const itemId = inventory[i];
+    if (typeof itemId === 'number' && itemId >= 0 && itemId < WEAPON_NAMES.length) {
+      drawWeaponIcon(ctx, x + slotW / 2, invY + 27, itemId, itemId === 0 ? 0.9 : 0.82);
     } else {
-      // A clear empty-hand indicator; deliberately no weapon icon.
-      ctx.strokeStyle = selected ? '#c9ffe0' : '#8ea5a1'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x + slotW / 2, invY + 26, 9, 0.2, Math.PI * 1.75); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(x + slotW / 2 - 5, invY + 23); ctx.lineTo(x + slotW / 2 - 5, invY + 16);
-      ctx.moveTo(x + slotW / 2, invY + 22); ctx.lineTo(x + slotW / 2, invY + 14);
-      ctx.moveTo(x + slotW / 2 + 5, invY + 23); ctx.lineTo(x + slotW / 2 + 5, invY + 17); ctx.stroke();
+      drawFistsIcon(ctx, x + slotW / 2, invY + 25, 0.9, selected ? '#d4ffe3' : '#9cb0ad');
     }
     ctx.fillStyle = selected ? '#ffffff' : '#c5d2d6'; ctx.textAlign = 'center'; ctx.font = 'bold 9px system-ui';
-    ctx.fillText(i < 4 ? WEAPON_NAMES[i] : 'EMPTY', x + slotW / 2, invY + slotH - 7, slotW - 5);
+    ctx.fillText(typeof itemId === 'number' ? WEAPON_NAMES[itemId] : 'FISTS', x + slotW / 2, invY + slotH - 7, slotW - 5);
   }
   // Green rounded 100/100 health UI, centred at the bottom.
   const hpW = Math.min(280, w - 38), hpH = 40;
@@ -752,8 +785,19 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillText(`${Math.max(0, Math.round(mine.health))} / 100`, w / 2, hpY + 25);
 
   if (!keys.touch) {
-    ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 160, 24, 8);
-    ctx.fillStyle = '#f1f5f6'; ctx.font = '11px system-ui'; ctx.textAlign = 'left'; ctx.fillText('M MENU  •  1–5 INVENTORY', 24, h - 22);
+    ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 238, 24, 8);
+    ctx.fillStyle = '#f1f5f6'; ctx.font = '11px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP  ·  G DROP  ·  EMPTY SLOT: PUNCH', 24, h - 22, 216);
+  }
+  const nearestWorldPickup = (state.pickups || []).some((pickup: any) => {
+    const dx = pickup.x - mine.x, dy = pickup.y - mine.y;
+    return dx * dx + dy * dy <= 48 * 48;
+  });
+  if (nearestWorldPickup) {
+    const hasEmptySlot = Array.isArray(mine.inventory) && mine.inventory.some((itemId: any) => itemId == null);
+    const promptY = h - (keys.touch ? 210 : 72);
+    ctx.fillStyle = 'rgba(13,27,30,.90)'; roundRect(ctx, w / 2 - 128, promptY - 17, 256, 25, 8);
+    ctx.fillStyle = hasEmptySlot ? '#c9ffe0' : '#ffd6a1'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(hasEmptySlot ? 'PRESS E TO PICK UP WEAPON' : 'INVENTORY FULL · PRESS G TO DROP', w / 2, promptY);
   }
   const top = Object.entries(state.players || {}).sort((a: any, b: any) => b[1].score - a[1].score).slice(0, 4);
   const boardH = 28 + top.length * 17;
@@ -895,8 +939,8 @@ function drawMenu(): void {
     const leftW = Math.floor(panelW * .555) - inner;
     const rightX = panelX + Math.floor(panelW * .585);
     const rightW = panelX + panelW - inner - rightX;
-    ctx.textAlign = 'left'; ctx.fillStyle = '#eaf5f1'; ctx.font = 'bold 13px system-ui';
-    ctx.fillText('CHOOSE YOUR REGION', leftX, panelY + 27);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#eaf5f1'; ctx.font = 'bold 13px system-ui';
+    ctx.fillText('AVAILABLE SERVERS', leftX + leftW / 2, panelY + 27);
     const regions = menuRooms?.regions || [];
     const regionGap = 6, regionCount = Math.max(1, regions.length);
     const regionW = (leftW - regionGap * Math.max(0, regionCount - 1)) / regionCount;
@@ -904,13 +948,13 @@ function drawMenu(): void {
     if (!regions.length) {
       ctx.fillStyle = '#9bb0b4'; ctx.font = '12px system-ui'; ctx.fillText('Using the default server region.', leftX, panelY + 57);
     }
-    ctx.fillStyle = '#b5c9cd'; ctx.font = 'bold 11px system-ui';
-    ctx.fillText(`AVAILABLE SERVERS  ·  ${regionName(selectedRegion)}`, leftX, panelY + 89);
-    menuButton(ctx, leftX + leftW - 77, panelY + 73, 77, 24, 'REFRESH', 'refresh');
+    ctx.fillStyle = '#b5c9cd'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(`SERVERS IN ${regionName(selectedRegion).toUpperCase()}`, leftX + leftW / 2, panelY + 83);
+    menuButton(ctx, leftX + leftW - 77, panelY + 69, 77, 22, 'REFRESH', 'refresh');
     const allRooms = menuRooms?.rooms || [];
     const regionalRooms = allRooms.filter((r: any) => r.region === selectedRegion);
     const rooms = regionalRooms.length ? regionalRooms : allRooms.filter((r: any) => r.region == null);
-    const listY = panelY + 101;
+    const listY = panelY + 94;
     const listBottom = panelY + panelH - 14;
     const rowH = 36;
     const maxRows = Math.max(1, Math.floor((listBottom - listY) / rowH));
@@ -933,14 +977,14 @@ function drawMenu(): void {
     ctx.fillStyle = '#f3f8f6'; ctx.font = 'bold 15px system-ui'; ctx.textAlign = 'left';
     ctx.fillText('LOADOUT', rightX + 16, panelY + 38);
     ctx.fillStyle = '#a9bdc2'; ctx.font = '11px system-ui';
-    ctx.fillText('4 weapons + empty hands · keys 1–5', rightX + 16, panelY + 57, rightW - 32);
+    ctx.fillText('Glock starter · find other guns in crates', rightX + 16, panelY + 57, rightW - 32);
     WEAPON_NAMES.forEach((name, i) => {
       const yy = panelY + 69 + i * 28;
       ctx.fillStyle = 'rgba(8,19,24,.72)'; roundRect(ctx, rightX + 14, yy, rightW - 28, 24, 6);
-      if (i < 4) drawWeaponIcon(ctx, rightX + 31, yy + 12, i, .55);
-      else { ctx.strokeStyle = '#73e6a1'; ctx.lineWidth = 1.7; ctx.beginPath(); ctx.arc(rightX + 31, yy + 12, 5, .2, Math.PI * 1.75); ctx.stroke(); }
-      ctx.fillStyle = WEAPON_COLORS[i]; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
-      ctx.fillText(`${i + 1}. ${name}`, rightX + 45, yy + 16, rightW - 60);
+      if (i === 0) drawWeaponIcon(ctx, rightX + 31, yy + 12, 0, .55);
+      else drawFistsIcon(ctx, rightX + 31, yy + 12, .48, '#9cb0ad');
+      ctx.fillStyle = i === 0 ? WEAPON_COLORS[0] : '#a8bab7'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText(`${i + 1}. ${i === 0 ? name : 'EMPTY / FISTS'}`, rightX + 45, yy + 16, rightW - 60);
     });
     const actionBottom = panelY + panelH - 12;
     const playY = actionBottom - 43;
@@ -948,16 +992,16 @@ function drawMenu(): void {
     const controlY = newY - 45;
     ctx.fillStyle = '#d5e1e4'; ctx.font = '10px system-ui'; ctx.textAlign = 'left';
     ctx.fillText('WASD / arrows · Move', rightX + 16, controlY, rightW - 30);
-    ctx.fillText('Mouse / F · Fire    Space · Smash', rightX + 16, controlY + 14, rightW - 30);
-    ctx.fillText('M · Menu', rightX + 16, controlY + 28, rightW - 30);
+    ctx.fillText('Mouse / F · Fire or punch · Space · Smash', rightX + 16, controlY + 14, rightW - 30);
+    ctx.fillText('E · Pick up    G · Drop    M · Menu', rightX + 16, controlY + 28, rightW - 30);
     menuButton(ctx, rightX + 14, newY, rightW - 28, 33, 'NEW SERVER IN THIS REGION', 'new', false,
       joinInProgress || !selectedRegion || ((menuRooms?.regions || []).length > 0 && (menuRooms?.rooms || []).some((r: any) => r.region == null)));
     menuButton(ctx, rightX + 14, playY, rightW - 28, 39, '▶  PLAY', 'play', true, joinInProgress);
   } else {
     const contentX = panelX + 12;
     const contentW = panelW - 24;
-    ctx.textAlign = 'left'; ctx.fillStyle = '#eaf5f1'; ctx.font = 'bold 11px system-ui';
-    ctx.fillText('REGION', contentX, panelY + 18);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#eaf5f1'; ctx.font = 'bold 12px system-ui';
+    ctx.fillText('AVAILABLE SERVERS', contentX + contentW / 2, panelY + 17);
     const regions = menuRooms?.regions || [];
     const cols = contentW >= 500 ? Math.max(1, Math.min(4, regions.length || 1)) : 2;
     const rgap = 5, rw = (contentW - rgap * Math.max(0, cols - 1)) / cols;
@@ -967,14 +1011,14 @@ function drawMenu(): void {
       menuButton(ctx, contentX + col * (rw + rgap), regionTop + row * 29, rw, 25, r.name, `region:${r.id}`, selectedRegion === r.id);
     });
     const regionRows = Math.ceil(regions.length / cols);
-    const headingY = regionTop + Math.max(1, regionRows) * 29 + 12;
-    ctx.fillStyle = '#b5c9cd'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
-    ctx.fillText(`SERVERS · ${regionName(selectedRegion)}`, contentX, headingY);
-    menuButton(ctx, contentX + contentW - 70, headingY - 16, 70, 22, 'REFRESH', 'refresh');
+    const headingY = regionTop + Math.max(1, regionRows) * 29 + 11;
+    ctx.fillStyle = '#b5c9cd'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(`SERVERS IN ${regionName(selectedRegion).toUpperCase()}`, contentX + contentW / 2, headingY);
+    menuButton(ctx, contentX + contentW - 70, headingY - 17, 70, 22, 'REFRESH', 'refresh');
     const allRooms = menuRooms?.rooms || [];
     const regionalRooms = allRooms.filter((r: any) => r.region === selectedRegion);
     const rooms = regionalRooms.length ? regionalRooms : allRooms.filter((r: any) => r.region == null);
-    const listY = headingY + 7;
+    const listY = headingY + 8;
     const playY = panelY + panelH - 48;
     const newY = playY - 38;
     const hintReserve = h >= 500 ? 24 : 0;
@@ -995,7 +1039,7 @@ function drawMenu(): void {
     menuButton(ctx, contentX, playY, contentW, 39, '▶  PLAY', 'play', true, joinInProgress);
     if (h >= 500) {
       ctx.fillStyle = '#a7bdc1'; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
-      ctx.fillText('WASD MOVE · M MENU · 1–5 INVENTORY', w / 2, newY - 10, contentW);
+      ctx.fillText('WASD MOVE · E PICK UP · G DROP · EMPTY SLOTS PUNCH', w / 2, newY - 10, contentW);
     }
   }
   // Error messages live in the reserved header gap above the panel, never on top of a button or label.
@@ -1037,7 +1081,7 @@ async function startWorker(): Promise<void> {
         move: [Math.round(mx * 127), Math.round(my * 127)],
         aim,
         weapon: selectedWeapon,
-        buttons: { fire: pressedFire, smash: keys.pressed(' ') },
+        buttons: { fire: pressedFire, smash: keys.pressed(' '), pickup: keys.pressed('e'), drop: keys.pressed('g') },
       };
     },
   });
