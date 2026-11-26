@@ -35,6 +35,9 @@ let localFireWasDown = false;
 let localFireHeldSince = 0;
 let physicalMouseWasDown = false;
 let suppressCurrentMousePress = false;
+// Preserve very short mouse clicks even if pointerdown and pointerup occur between input samples.
+// The pulse is consumed once by the SDK input callback; it never creates a second projectile path.
+let pendingMouseFirePulse = false;
 // Auto weapons need a deliberate hold before repeating; a normal click must create one shot.
 const AUTO_FIRE_HOLD_DELAY_MS = 260;
 let latestLocalInventory: Array<number | null> = [0, null, null, null, null];
@@ -43,6 +46,7 @@ let localInstantMuzzleWeapon = -1;
 let latestLocalAimAngle = 0;
 let activePlayerId = '';
 let debugOverlayEnabled = false;
+let collisionDebugEnabled = false;
 let lastLocalShotTokenRequested = 0;
 let lastLocalShotAt = 0;
 let lastLocalShotWeapon = -1;
@@ -615,6 +619,7 @@ function resetLocalShotState(): void {
   localFireHeldSince = 0;
   physicalMouseWasDown = false;
   suppressCurrentMousePress = false;
+  pendingMouseFirePulse = false;
   latestLocalInventory = [0, null, null, null, null];
   localInstantMuzzleUntil = 0;
   localInstantMuzzleWeapon = -1;
@@ -681,13 +686,87 @@ function drawSynchronizedBullets(ctx: CanvasRenderingContext2D, bulletsInput: an
   }
 }
 
+function propHitbox(kind: string): { hx: number; hy: number } {
+  if (kind === 'car') return { hx: 46, hy: 22 };
+  if (kind === 'bench') return { hx: 17, hy: 13 };
+  if (kind === 'crate') return { hx: 25, hy: 25 };
+  if (kind === 'hydrant') return { hx: 13, hy: 14.5 };
+  if (kind === 'cone') return { hx: 15, hy: 16 };
+  return { hx: 13, hy: 14.5 };
+}
+function drawCollisionDebugWorld(ctx: CanvasRenderingContext2D, state: any): void {
+  if (!collisionDebugEnabled) return;
+  ctx.save();
+  ctx.lineWidth = 2;
+  // Building collision boxes.
+  ctx.strokeStyle = 'rgba(255,82,82,.95)';
+  for (const b of BUILDINGS) ctx.strokeRect(b.x, b.y, b.w, b.h);
+  // Tree trunk hitboxes (the canopies are visual only).
+  ctx.strokeStyle = 'rgba(255,201,71,.98)';
+  for (const t of TREES) { ctx.beginPath(); ctx.arc(t.x, t.y, 7.5, 0, Math.PI * 2); ctx.stroke(); }
+  // Physical prop bodies.
+  ctx.strokeStyle = 'rgba(80,220,255,.95)';
+  for (const p of state.props || []) {
+    if (!p.active) continue;
+    const box = propHitbox(String(p.kind || 'bin'));
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(Number(p.angle) || 0);
+    ctx.strokeRect(-box.hx, -box.hy, box.hx * 2, box.hy * 2);
+    ctx.restore();
+  }
+  // Player bodies and the exact muzzle position implied by the current rendered aim/weapon.
+  ctx.strokeStyle = 'rgba(111,255,151,.98)';
+  for (const [id, p] of Object.entries(state.players || {}) as [string, any][]) {
+    const angle = Number(p.aimAngle) || 0;
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(angle + Math.PI / 2);
+    ctx.strokeRect(-21.5, -17.5, 43, 35);
+    ctx.restore();
+    const inv = Array.isArray(p.inventory) ? p.inventory : [];
+    const slot = id === activePlayerId ? selectedWeapon : Number(p.weapon) || 0;
+    const weaponId = inv[slot];
+    if (typeof weaponId !== 'number' || weaponId < 0 || weaponId >= WEAPON_MUZZLE_FORWARD.length) continue;
+    const forward = WEAPON_MUZZLE_FORWARD[weaponId];
+    const mx = p.x + Math.cos(angle) * forward - Math.sin(angle) * WEAPON_MUZZLE_SIDE;
+    const my = p.y + Math.sin(angle) * forward + Math.cos(angle) * WEAPON_MUZZLE_SIDE;
+    ctx.strokeStyle = id === activePlayerId ? '#ffffff' : '#a3b8ff';
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(mx, my); ctx.stroke();
+    ctx.beginPath(); ctx.arc(mx, my, 4.5, 0, Math.PI * 2); ctx.stroke();
+  }
+  // Pickups and authoritative bullets.
+  ctx.strokeStyle = 'rgba(255,170,50,.95)';
+  for (const p of state.pickups || []) { ctx.beginPath(); ctx.arc(p.x, p.y, 18, 0, Math.PI * 2); ctx.stroke(); }
+  ctx.fillStyle = '#ff42e8';
+  for (const b of state.bullets || []) { ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
+}
+
+function seedLocalShotTokenBaseline(playerState: any): void {
+  if (localShotTokenBaselineReady || !playerState) return;
+  let raw = Number(playerState.clientShotToken);
+  // With predict:'self', the local player may live in `self` and be absent from the raw
+  // `state.players` record. Seed from the merged local player first, then fall back to the
+  // confirmed room state. This is only called until the first baseline is established.
+  if (!Number.isFinite(raw)) {
+    try {
+      const confirmed = currentGame?.inspect?.()?.confirmed?.state?.players?.[activePlayerId];
+      raw = Number(confirmed?.clientShotToken);
+    } catch {}
+  }
+  // Current sim versions always initialize this field. The final zero fallback is for a stale
+  // state from an older draft; it prevents the fire gate from staying closed forever. If the
+  // server token was nonzero, the first attempted token will resynchronize on the next input.
+  localShotToken = Number.isFinite(raw) ? (raw >>> 0) : 0;
+  localShotTokenBaselineReady = true;
+  localFireWasDown = false;
+}
+
 function drawGame(state: any, self: any, playerId: string): void {
   const ctx = view.begin('#7eb47a');
   const s: any = mergeSelf(state, self, 'players', playerId);
   if (!s || !s.players || !s.players[playerId]) return;
   const mine = s.players[playerId];
+  seedLocalShotTokenBaseline(mine);
   const renderNow = performance.now();
-    latestLocalInventory = Array.isArray(mine.inventory) ? mine.inventory.slice() : [0, null, null, null, null];
+  latestLocalInventory = Array.isArray(mine.inventory) ? mine.inventory.slice() : [0, null, null, null, null];
   updateWeaponAudio(s.players, playerId);
   updateDeathAudio(s.players, mine, playerId);
   // With predict:'self', local movement is predicted while remote players are interpolated.
@@ -765,6 +844,7 @@ function drawGame(state: any, self: any, playerId: string): void {
     ctx.beginPath(); ctx.arc(pointer.x, pointer.y, 9, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(pointer.x - 14, pointer.y); ctx.lineTo(pointer.x - 5, pointer.y); ctx.moveTo(pointer.x + 5, pointer.y); ctx.lineTo(pointer.x + 14, pointer.y); ctx.moveTo(pointer.x, pointer.y - 14); ctx.lineTo(pointer.x, pointer.y - 5); ctx.moveTo(pointer.x, pointer.y + 5); ctx.lineTo(pointer.x, pointer.y + 14); ctx.stroke();
   }
+  drawCollisionDebugWorld(ctx, s);
   ctx.restore();
   drawHud(ctx, mine, s);
   drawMultiplayerDiagnostics(ctx, mine, s);
@@ -784,6 +864,31 @@ function weaponSlotAt(screenX: number, screenY: number): number {
   }
   return -1;
 }
+
+// Capture pointer presses independently from the frame-sampled controls state. Without this,
+// a very short click can begin and end between two `input()` samples, leaving no shotToken change.
+// Inventory clicks are filtered here; the pulse is consumed exactly once by the input callback.
+canvas.addEventListener('pointerdown', (event: PointerEvent) => {
+  if (event.button !== 0 || mode !== 'game') return;
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  if (event.pointerType === 'touch' && x < view.width / 2) return; // left touch zone is the move stick
+  const clickedInventory = weaponSlotAt(x, y) >= 0;
+  // Mark the pointer state from the DOM event itself. This is more reliable than inferring a new
+  // press from a sampled `mouse.down` value, especially after quick release/re-press sequences.
+  physicalMouseWasDown = true;
+  suppressCurrentMousePress = clickedInventory;
+  if (!clickedInventory) pendingMouseFirePulse = true;
+}, { passive: true });
+window.addEventListener('pointerup', () => {
+  physicalMouseWasDown = false;
+  suppressCurrentMousePress = false;
+}, { passive: true });
+window.addEventListener('pointercancel', () => {
+  physicalMouseWasDown = false;
+  suppressCurrentMousePress = false;
+}, { passive: true });
 
 // Client-side render FPS and the ping reported by modd.io's room connection.
 // These are sampled at a low rate so the HUD does not add meaningful work to each frame.
@@ -979,7 +1084,7 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
 
   if (!keys.touch) {
     ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 292, 24, 8);
-    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · EMPTY SLOT: PUNCH · F3 DEBUG', 24, h - 22, 272);
+    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · EMPTY SLOT: PUNCH · F3 DIAG · F4 HITBOX', 24, h - 22, 272);
   }
   const nearestWorldPickup = (state.pickups || []).some((pickup: any) => {
     const dx = pickup.x - mine.x, dy = pickup.y - mine.y;
@@ -1039,8 +1144,18 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   lines.push(`DRIFT predicted-confirmed ${netDiagnostics.localDriftPx == null ? '--' : netDiagnostics.localDriftPx.toFixed(1) + ' px'} · players ${Object.keys(state.players || {}).length}`);
   lines.push(`ENTITIES bullets ${(state.bullets || []).length} · pickups ${(state.pickups || []).length} · particles ${(state.particles || []).length} · props ${(state.props || []).filter((p: any) => p.active).length}`);
   lines.push(`SHOTS local token ${lastLocalShotTokenRequested || '--'} · fired ${confirmedToken ?? '--'} · resolved ${resolvedToken ?? '--'} · queue ${queued}`);
+  lines.push(`FIRE GATE baseline ${localShotTokenBaselineReady ? 'READY' : 'WAIT'} · aim ${aimCameraReady ? 'READY' : 'WAIT'} · click pulse ${pendingMouseFirePulse ? 'PENDING' : 'clear'}`);
   lines.push(`LAST LOCAL SHOT ${lastLocalShotWeapon >= 0 ? WEAPON_NAMES[lastLocalShotWeapon] : '--'} · ${lastLocalShotAt ? ((performance.now() - lastLocalShotAt) / 1000).toFixed(1) + 's ago' : '--'}`);
   lines.push(`INVENTORY ${inventoryLabel || '--'}`);
+  lines.push(`HITBOX DEBUG ${collisionDebugEnabled ? 'ON · F4 TO HIDE' : 'OFF · F4 TO SHOW'}`);
+  const shotTrace: any[] = Array.isArray(state.shotTrace) ? state.shotTrace.slice(-3).reverse() : [];
+  for (const event of shotTrace) {
+    const ownerName = String(state.players?.[event.owner]?.name || event.owner || '?').slice(0, 8);
+    const weaponName = WEAPON_NAMES[Number(event.weaponId)] || 'NO WEAPON';
+    const pellet = Number(event.pelletIndex) >= 0 ? `.${Number(event.pelletIndex) + 1}` : '';
+    const target = String(event.target || event.detail || '').slice(0, 19);
+    lines.push(`TRACE F${event.frame} ${String(event.kind).toUpperCase()} ${ownerName} ${weaponName} #${event.token}${pellet} @${Math.round(event.x)},${Math.round(event.y)} ${target}`);
+  }
   const maxLines = Math.max(6, Math.floor((screenH - 120) / lineH));
   const visibleLines = lines.slice(0, maxLines);
   const panelH = 28 + visibleLines.length * lineH + 8;
@@ -1054,7 +1169,8 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   ctx.font = screenH < 480 ? '9px ui-monospace, monospace' : '10px ui-monospace, monospace';
   visibleLines.forEach((line, i) => {
     const isWarn = (line.startsWith('DESYNC') && mismatch != null && mismatch > 0)
-      || (line.startsWith('DRIFT') && netDiagnostics.localDriftPx != null && netDiagnostics.localDriftPx > 60);
+      || (line.startsWith('DRIFT') && netDiagnostics.localDriftPx != null && netDiagnostics.localDriftPx > 60)
+      || (line.startsWith('TRACE') && (line.includes('REJECTED') || line.includes('HIT')));
     ctx.fillStyle = isWarn ? '#ffaaa2' : (i % 2 === 0 ? '#f0f5f3' : '#b8c9cd');
     ctx.fillText(line, x + 10, y + 34 + i * lineH, panelW - 20);
   });
@@ -1337,8 +1453,14 @@ async function startWorker(): Promise<void> {
       physicalMouseWasDown = physicalMouseDown;
       const mouseFireDown = physicalMouseDown && !suppressCurrentMousePress;
       const pressedFire = mouseFireDown || keys.keys.has('f');
+      // The controls sampler can miss a very short click if down/up land between callbacks.
+      // A separately captured pointer pulse guarantees one input edge, while inventory clicks
+      // are filtered at pointerdown and never fire.
+      const canConsumeMousePulse = localShotTokenBaselineReady && aimCameraReady;
+      const mouseClickPulse = pendingMouseFirePulse && canConsumeMousePulse;
+      if (mouseClickPulse) pendingMouseFirePulse = false;
       const now = performance.now();
-      const fireEdge = pressedFire && !localFireWasDown;
+      const fireEdge = (mouseClickPulse && !suppressCurrentMousePress) || (pressedFire && !localFireWasDown);
       if (fireEdge) localFireHeldSince = now;
       if (!pressedFire) localFireHeldSince = 0;
       // Until the worker's authoritative shot-token baseline is available, keep the edge armed.
@@ -1361,7 +1483,7 @@ async function startWorker(): Promise<void> {
         shotToken: localShotToken,
         shotAim: aim,
         shotWeapon: shotWeaponId,
-        buttons: { fire: pressedFire, smash: keys.pressed(' '), pickup: keys.keys.has('e'), drop: keys.keys.has('g') },
+        buttons: { fire: pressedFire || mouseClickPulse, smash: keys.pressed(' '), pickup: keys.keys.has('e'), drop: keys.keys.has('g') },
       };
     },
   });
@@ -1392,14 +1514,10 @@ async function startWorker(): Promise<void> {
   mode = 'game';
   game.onFrame(({ state, self }: any) => {
     if (mode !== 'game') return;
-    if (!localShotTokenBaselineReady) {
-      const playerState = state?.players?.[game.player];
-      if (playerState && Number.isFinite(Number(playerState.clientShotToken))) {
-        localShotToken = Number(playerState.clientShotToken) >>> 0;
-        localShotTokenBaselineReady = true;
-      }
-    }
     sampleHudMetrics(game);
+    // drawGame merges `self` into the confirmed/interpolated state and seeds the shot-token
+    // baseline from that merged local player. Do not wait on state.players[game.player], which
+    // is not guaranteed to contain the self-predicted player.
     drawGame(state, self, game.player);
   });
 }
@@ -1480,6 +1598,7 @@ function appLoop(): void {
     if (keys.pressed('enter')) void joinSelected(false);
   } else if (mode === 'game') {
     if (keys.pressed('f3')) debugOverlayEnabled = !debugOverlayEnabled;
+    if (keys.pressed('f4')) collisionDebugEnabled = !collisionDebugEnabled;
     if (keys.pressed('m')) void enterMenu();
     else if (keys.pressed('mouse0')) {
       const slot = weaponSlotAt(keys.mouse.x, keys.mouse.y);
