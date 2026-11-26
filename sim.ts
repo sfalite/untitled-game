@@ -150,7 +150,7 @@ const TREES: Tree[] = [
 ];
 
 type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
-type Prop = { id: number; x: number; y: number; prevX: number; prevY: number; prevAngle: number; kind: PropKind; variant: number; active: boolean; respawnAt: number; body: number; angle: number; health: number };
+type Prop = { id: number; x: number; y: number; mapX: number; mapY: number; prevX: number; prevY: number; prevAngle: number; kind: PropKind; variant: number; active: boolean; respawnAt: number; body: number; angle: number; health: number };
 type PendingShot = { token: number; shotKey: string; aimAngle: number; weaponId: number; slot: number; x: number; y: number; receivedFrame: number };
 type Player = {
   name: string; x: number; y: number; prevX: number; prevY: number; body: number; move: [number, number]; aimAngle: number;
@@ -545,7 +545,7 @@ function recordShotTrace(
 
 export default defineSim({
   name: 'chaos-city',
-  version: '27',
+  version: '28',
   tickRate: 20,
   maxPlayers: 32,
   // Predict only the local player. The SDK interpolates remote players from authoritative
@@ -574,7 +574,7 @@ export default defineSim({
   init(ctx): State {
     const world: any = ctx.physics;
     makeMapPhysics(world);
-    const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, prevX: p.x, prevY: p.y, prevAngle: 0, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0, health: propMaxHealth(p.kind) }));
+    const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, mapX: p.x, mapY: p.y, prevX: p.x, prevY: p.y, prevAngle: 0, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0, health: propMaxHealth(p.kind) }));
     for (const prop of props) prop.body = makePropBody(world, prop);
     return {
       players: {}, props, pickups: [], bullets: [], particles: [],
