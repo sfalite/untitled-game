@@ -113,3 +113,19 @@ Test in the modd.io browser after running `npx moddio test` and `npx moddio dev`
 - Bullet state records its authoritative spawn point and weapon ID. Client rendering now applies the same short-lived visual correction to every player's newly spawned bullets, not only the local player's bullets. The correction follows the rendered owner's current muzzle for the first two ticks and fades out by tick three.
 - Removed the older local-only X/Y prediction nudge, which ignored aim rotation and could shift shots sideways while the player rotated. The visual correction does not affect server-authoritative trajectories, collision, or damage.
 - Added TypeScript and source/muzzle-transform checks. Official modd.io runtime and live multiplayer browser tests remain unperformed in this environment.
+
+
+## Update v14 — multiplayer projectile alignment and prop HP
+
+- Removed the short-lived visual muzzle correction that was repeatedly moving newly spawned bullets toward the shooter's *current* muzzle. It caused confirmed projectile paths to bend/jump while the shooter moved or rotated.
+- Changed the simulation prediction mode to `world`, so the local rendering draws the player, their aim, physics state, and bullets from the same predicted shared-world timeline. The renderer now draws bullet `x/y` directly and never repositions authoritative projectiles.
+- Removed `spawnX` and `spawnY` from bullet state because the client no longer uses visual spawn correction; authoritative bullet coordinates and velocity remain the only source of truth for rendering and collision.
+- Added health to every destructible map prop: 50 HP for crates, bins, hydrants, cones and benches; 200 HP for cars. Hits subtract weapon damage, while a smash removes 25 HP. Objects respawn with their full HP and show a small health bar after taking damage.
+- Bumped the simulation version to 16.
+
+### Validation status
+
+- Source checks verify that no bullet-position correction helper remains and all bullet rendering uses the simulation's `x/y` directly.
+- TypeScript no-emit compilation and a local simulation smoke test are run for this package build. This does not replace `npx moddio test` or live two-player testing against the actual modd.io SDK and Planck adapter.
+
+- Follow-up muzzle audit: set the M134 forward offset to 24px (the front of the drawn barrel cluster) so its spark and projectile start at the visible muzzle, not inside the barrel.

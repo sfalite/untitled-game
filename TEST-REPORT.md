@@ -103,3 +103,15 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3`,
 ### Not performed
 - Official `npx moddio test` / `npx moddio play` with the actual modd.io SDK.
 - Live-browser test with three connected players. Network-interpolation behavior must still be confirmed in the real modd.io runtime.
+
+
+## Update v14 — projectile rendering and prop durability
+
+### Local checks performed
+- Removed the former `visualBulletPosition` / current-muzzle correction, which altered confirmed bullet paths for the first three ages and could make bullets visibly jump sideways during movement or rotation.
+- Selected `predict: 'world'` so the shared predicted world contains player transforms and bullets on the same timeline; renderer uses `b.x` and `b.y` as supplied by the simulation.
+- Removed unused `spawnX` / `spawnY` visual-only bullet fields.
+- Added `health` state to all map props, initialized at 50 HP except cars at 200 HP; bullets apply their weapon damage and melee smash removes 25 HP. Props restore their maximum HP when respawned. Renderer displays a health bar once a prop is damaged.
+- Official SDK checks and an actual networked two-player browser session are not available from this editing environment; the changed prediction mode's production CPU cost and remaining latency behaviour must be tested with the official CLI.
+
+- Follow-up visual-anchor check updated the M134 muzzle to 24px forward (front of the procedural barrel cluster); all other weapon muzzle offsets remain matched to their local drawing transforms.

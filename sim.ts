@@ -150,7 +150,7 @@ const TREES: Tree[] = [
 ];
 
 type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
-type Prop = { id: number; x: number; y: number; kind: PropKind; variant: number; active: boolean; respawnAt: number; body: number; angle: number };
+type Prop = { id: number; x: number; y: number; kind: PropKind; variant: number; active: boolean; respawnAt: number; body: number; angle: number; health: number };
 type Player = {
   name: string; x: number; y: number; prevX: number; prevY: number; body: number; move: [number, number]; aimAngle: number;
   /** Selected inventory slot (0-4). Actual weapon IDs live in inventory. */
@@ -162,7 +162,7 @@ type Player = {
   deathSeq: number; deathX: number; deathY: number;
 };
 type WeaponPickup = { id: number; x: number; y: number; weaponId: number; angle: number; createdFrame: number };
-type Bullet = { id: number; owner: string; x: number; y: number; spawnX: number; spawnY: number; weaponId: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
+type Bullet = { id: number; owner: string; x: number; y: number; weaponId: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
 type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
 type State = {
   players: Record<string, Player>; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[];
@@ -312,6 +312,7 @@ function makePropBody(world: any, prop: Prop): number {
   body.setAngularDamping(4.5);
   return bodyId(world, body);
 }
+function propMaxHealth(kind: PropKind): number { return kind === 'car' ? 200 : 50; }
 function propPoints(kind: PropKind): number { return kind === 'car' ? 35 : kind === 'bench' ? 20 : 10; }
 function propRadius(kind: PropKind): number {
   const cfg = propPhysics(kind);
@@ -433,7 +434,18 @@ function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null):
     spawnWeaponPickup(state, weaponId, prop.x, prop.y, ctx.rng() * Math.PI * 2, ctx.frame);
   }
 }
-const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 22, 25] as const;
+function damageProp(state: State, ctx: any, prop: Prop, damage: number, player: Player | null): boolean {
+  if (!prop.active || damage <= 0) return false;
+  // Older/corrupt state should recover to the object's normal maximum rather than becoming immortal.
+  if (!Number.isFinite(prop.health)) prop.health = propMaxHealth(prop.kind);
+  prop.health = Math.max(0, prop.health - damage);
+  if (prop.health <= 0) {
+    destroyProp(state, ctx, prop, player);
+    return true;
+  }
+  return false;
+}
+const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 24, 25] as const;
 const WEAPON_MUZZLE_SIDE = 8;
 function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
   // Match the exact local coordinates used by drawWeaponLocal + drawWeaponShape:
@@ -450,9 +462,13 @@ function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '15',
+  version: '16',
   tickRate: 20,
   maxPlayers: 32,
+  // Predict the complete shared world so each rendered player and their bullets come from
+  // the same simulation clock. This avoids visually re-attaching confirmed bullets to a
+  // different interpolated/predicted muzzle on each client.
+  predict: 'world',
   physics: box2dPhysics,
   input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', buttons: { flags: ['fire', 'smash', 'pickup', 'drop'] } },
 
@@ -475,7 +491,7 @@ export default defineSim({
   init(ctx): State {
     const world: any = ctx.physics;
     makeMapPhysics(world);
-    const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0 }));
+    const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0, health: propMaxHealth(p.kind) }));
     for (const prop of props) prop.body = makePropBody(world, prop);
     return { players: {}, props, pickups: [], bullets: [], particles: [], nextBulletId: 1, nextParticleId: 1, nextPickupId: 1 };
   },
@@ -518,6 +534,7 @@ export default defineSim({
       if (!prop.active && ctx.frame >= prop.respawnAt) {
         prop.active = true;
         prop.angle = 0;
+        prop.health = propMaxHealth(prop.kind);
         prop.body = makePropBody(world, prop);
       }
     }
@@ -611,7 +628,7 @@ export default defineSim({
         for (const prop of state.props) {
           if (!prop.active) continue;
           const dx = prop.x - p.x, dy = prop.y - p.y;
-          if (dx * dx + dy * dy <= SMASH_RANGE * SMASH_RANGE) destroyProp(state, ctx, prop, p);
+          if (dx * dx + dy * dy <= SMASH_RANGE * SMASH_RANGE) damageProp(state, ctx, prop, 25, p);
         }
       }
       const equippedWeaponId = p.inventory[p.weapon];
@@ -662,7 +679,7 @@ export default defineSim({
           const a = p.aimAngle + (ctx.rng() - 0.5) * weapon.spread;
           state.bullets.push({
             id: state.nextBulletId++, owner: id,
-            x: muzzle.x, y: muzzle.y, spawnX: muzzle.x, spawnY: muzzle.y,
+            x: muzzle.x, y: muzzle.y,
             weaponId: equippedWeaponId,
             vx: Math.cos(a) * weapon.speed, vy: Math.sin(a) * weapon.speed,
             damage: weapon.damage, life: weapon.life, color: weapon.color, bornFrame: ctx.frame, age: 0,
@@ -695,7 +712,7 @@ export default defineSim({
         if (!prop.active) continue;
         const cfg = propPhysics(prop.kind);
         if (segmentHitsOrientedBox(x0, y0, x1, y1, prop.x, prop.y, prop.angle || 0, cfg.hx, cfg.hy)) {
-          destroyProp(state, ctx, prop, state.players[b.owner] || null);
+          damageProp(state, ctx, prop, b.damage, state.players[b.owner] || null);
           hitProp = true;
           break;
         }
