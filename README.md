@@ -1,33 +1,20 @@
-# Chaos City.io — Update v21: Multiplayer diagnostics
+# Chaos City.io — Update v22
 
-This update adds an in-game diagnostic overlay and repeatable test entry points without replacing the modd.io SDK's networking/prediction stack or changing gameplay simulation rules.
+This update makes the existing modd.io multiplayer integration explicit and exposes its state in the F3 diagnostics panel. It does not add a separate custom netcode implementation that could fight the SDK.
 
-## In-game diagnostics
+## Networking behavior
 
-Press **F3** during a match to toggle **MULTIPLAYER DIAGNOSTICS**. The overlay samples `game.inspect()` at 2 Hz and shows:
+- `predict: 'self'`: the SDK predicts the local player and interpolates remote players.
+- `playInWorker({ inputLead: true, ... })`: explicitly keeps the SDK's default input scheduling enabled.
+- `sim.ts`: authoritative game rules and projectile collision/damage. Planck uses `canonicalEvery = 100` for deterministic world rebuilds during reconciliation/rollback.
+- `client/main.ts`: only the authoritative simulation's bullet list is rendered. Local sound and muzzle flash do not create provisional bullets.
+- Press **F3** in-game to inspect FPS, ping, frame gap, input lead/margin, desync, local drift, and shot token lifecycle.
 
-- FPS plus current, 10-second average, and peak sampled ping.
-- Confirmed/predicted frame numbers and their gap.
-- SDK input lead and safety margin when supplied by the SDK.
-- Desync agreed/disagreed counters and the last confirmed state hash when available.
-- Predicted-vs-confirmed local player position drift.
-- Player, bullet, pickup, prop and particle counts.
-- Local shot token versus the sim's last fired/resolved token and pending-shot queue length.
-- Local position, aim, HP and inventory summary.
+See `MULTIPLAYER-NETCODE.md` for a table mapping each networking technique to its implementation and limits.
 
-The panel is observational only: it does not write to the simulation, change prediction settings, move projectiles, or apply damage. FPS and ping in the regular HUD remain visible.
+## Test commands
 
-## Networking architecture retained
-
-- `predict: 'self'` remains enabled: the local player is predicted while remote players are interpolated by the SDK.
-- The SDK continues to own input scheduling, rollback/reconciliation, snapshots and room authority. This project does not implement a second prediction or interpolation loop.
-- `sim.ts` remains deterministic and owns authoritative movement/physics, projectile creation and collision, damage, inventory, pickups/drops, death and respawn.
-- Projectile visuals use the authoritative state only in this build. Local audio and muzzle flash are responsive visual feedback; they do not create a second projectile.
-- The overlay is diagnostic, not proof that all multiplayer issues are fixed. Read its counters while reproducing a live issue in modd.io.
-
-## Repeatable test commands
-
-Use Node.js 22 or later from this directory after dependencies/network access are available:
+Node.js 22 or later and working access to the npm registry are required. From this project directory run:
 
 ```sh
 npx moddio test
@@ -35,10 +22,4 @@ npx moddio play --players 2 --seconds 30 --shots 3,10,20
 npx moddio play --players 3 --seconds 60 --shots 5,15,30
 ```
 
-Equivalent npm scripts are available: `npm run test:sim`, `npm run test:browser:2`, `npm run test:browser:3`, and `npm run test:stability`. The CLI must be installed/downloadable for these commands to run.
-
-For live modd.io testing, join the same room from two browser sessions, press F3 in each, and reproduce: one click per semiautomatic shot, held automatic fire, fire while moving/turning, bullets against walls/trees/props, damage, weapon pickup/drop, and respawn. Compare confirmed/predicted frame gap, desync counters, ping, drift and shot token/fired/resolved values. If the issue appears only live, record those readings and the weapon/action that triggered it.
-
-## Asset and compatibility notes
-
-The current game slug is preserved in `moddio.json`. Assets are local and loaded through relative paths. Preserve the existing `llms.txt`, `.gitignore`, and `tsconfig.json` in the working repository when applying the ZIP.
+The CLI/browser tests must be run on the real SDK. A TypeScript check alone does not confirm live multiplayer behavior. Preserve the repository's existing `llms.txt`, `.gitignore`, and `tsconfig.json` when applying this package.
