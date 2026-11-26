@@ -24,12 +24,21 @@ interface WeaponRule {
   pellets: number;
   color: string;
 }
+// Weapon IDs are stable item types, not inventory slot numbers:
+// 0 Glock-17, 1 AK-47, 2 M249, 3 M134 Minigun, 4 Shotgun.
 const WEAPONS: WeaponRule[] = [
+  { damage: 16, cooldown: 8, speed: 18, life: 34, spread: 0.035, pellets: 1, color: '#ffe07a' },
   { damage: 22, cooldown: 7, speed: 18, life: 36, spread: 0.045, pellets: 1, color: '#ffd16a' },
   { damage: 9, cooldown: 3, speed: 18, life: 36, spread: 0.065, pellets: 1, color: '#ffb347' },
   { damage: 6, cooldown: 3, speed: 19, life: 36, spread: 0.11, pellets: 1, color: '#ff8f53' },
   { damage: 8, cooldown: 12, speed: 15, life: 28, spread: 0.25, pellets: 5, color: '#fff0b0' },
 ];
+const WEAPON_DROP_CHANCE = 0.55;
+const PICKUP_RADIUS = 48;
+const MAX_WEAPON_PICKUPS = 80;
+const PUNCH_DAMAGE = 12;
+const PUNCH_RANGE = 42;
+const PUNCH_COOLDOWN = 13;
 
 // Planck keeps contact/broad-phase history, so rebuild its canonical world periodically.
 const box2dPhysics: any = planck({ gravity: { x: 0, y: 0 } });
@@ -144,15 +153,19 @@ type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
 type Prop = { id: number; x: number; y: number; kind: PropKind; variant: number; active: boolean; respawnAt: number; body: number; angle: number };
 type Player = {
   name: string; x: number; y: number; prevX: number; prevY: number; body: number; move: [number, number]; aimAngle: number;
-  weapon: number; fire: boolean; smash: boolean; fireCooldown: number; smashCooldown: number;
+  /** Selected inventory slot (0-4). Actual weapon IDs live in inventory. */
+  weapon: number; inventory: Array<number | null>;
+  fire: boolean; smash: boolean; pickup: boolean; drop: boolean;
+  fireCooldown: number; smashCooldown: number; punchCooldown: number; punchFlash: number;
   score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number; shotWeapon: number;
   deathSeq: number; deathX: number; deathY: number;
 };
+type WeaponPickup = { id: number; x: number; y: number; weaponId: number; angle: number; createdFrame: number };
 type Bullet = { id: number; owner: string; x: number; y: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
 type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
 type State = {
-  players: Record<string, Player>; props: Prop[]; bullets: Bullet[]; particles: Particle[];
-  nextBulletId: number; nextParticleId: number;
+  players: Record<string, Player>; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[];
+  nextBulletId: number; nextParticleId: number; nextPickupId: number;
 };
 
 const PROP_SEEDS: Array<{x:number;y:number;kind:PropKind;variant?:number}> = [
@@ -383,6 +396,28 @@ function addParticles(state: State, ctx: any, x: number, y: number, kind: PropKi
     if (old) destroyBody(ctx, old.body);
   }
 }
+function spawnWeaponPickup(state: State, weaponId: number, x: number, y: number, angle: number, frame: number): void {
+  if (weaponId < 0 || weaponId >= WEAPONS.length) return; // Crates never spawn the Glock, but players may drop it.
+  const pickup: WeaponPickup = { id: state.nextPickupId++, x, y, weaponId, angle, createdFrame: frame };
+  state.pickups.push(pickup);
+  // Keep room state bounded if players repeatedly drop weapons and ignore them.
+  while (state.pickups.length > MAX_WEAPON_PICKUPS) state.pickups.shift();
+}
+function nearestPickupIndex(state: State, p: Player): number {
+  let bestIndex = -1;
+  let bestDistance = PICKUP_RADIUS * PICKUP_RADIUS;
+  for (let i = 0; i < state.pickups.length; i++) {
+    const pickup = state.pickups[i];
+    const dx = pickup.x - p.x, dy = pickup.y - p.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= bestDistance) { bestDistance = d2; bestIndex = i; }
+  }
+  return bestIndex;
+}
+function freeInventorySlot(p: Player): number {
+  if (p.inventory[p.weapon] == null) return p.weapon;
+  return p.inventory.findIndex((weaponId) => weaponId == null);
+}
 function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null): void {
   if (!prop.active) return;
   prop.active = false;
@@ -391,19 +426,28 @@ function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null):
   prop.body = -1;
   if (player) player.score += propPoints(prop.kind);
   addParticles(state, ctx, prop.x, prop.y, prop.kind, prop.kind === 'car' ? 18 : 11);
+  // Brown crates have a deterministic chance to spill one of the four collectible guns.
+  if (prop.kind === 'crate' && state.pickups.length < MAX_WEAPON_PICKUPS && ctx.rng() < WEAPON_DROP_CHANCE) {
+    const weaponId = 1 + ctx.int(4); // AK-47, M249, M134 or Shotgun.
+    spawnWeaponPickup(state, weaponId, prop.x, prop.y, ctx.rng() * Math.PI * 2, ctx.frame);
+  }
 }
-function muzzlePosition(p: Player): {x:number;y:number} {
-  // Local weapon grip is (8, 4); barrel runs toward local up. Convert through the sprite's +90° facing offset.
-  return { x: p.x + Math.cos(p.aimAngle) * 25 - Math.sin(p.aimAngle) * 8, y: p.y + Math.sin(p.aimAngle) * 25 + Math.cos(p.aimAngle) * 8 };
+function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
+  // The Glock has a shorter barrel; long guns share the grip-to-muzzle offset.
+  const barrelLength = weaponId === 0 ? 15 : weaponId === 3 ? 27 : 25;
+  return {
+    x: p.x + Math.cos(p.aimAngle) * barrelLength - Math.sin(p.aimAngle) * 8,
+    y: p.y + Math.sin(p.aimAngle) * barrelLength + Math.cos(p.aimAngle) * 8,
+  };
 }
 
 export default defineSim({
   name: 'chaos-city',
-  version: '11',
+  version: '12',
   tickRate: 20,
   maxPlayers: 32,
   physics: box2dPhysics,
-  input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', buttons: { flags: ['fire', 'smash'] } },
+  input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', buttons: { flags: ['fire', 'smash', 'pickup', 'drop'] } },
 
   fingerprint(state, id, { physics }) {
     const player = state.players[id];
@@ -426,7 +470,7 @@ export default defineSim({
     makeMapPhysics(world);
     const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0 }));
     for (const prop of props) prop.body = makePropBody(world, prop);
-    return { players: {}, props, bullets: [], particles: [], nextBulletId: 1, nextParticleId: 1 };
+    return { players: {}, props, pickups: [], bullets: [], particles: [], nextBulletId: 1, nextParticleId: 1, nextPickupId: 1 };
   },
 
   join(state, id, ctx, info) {
@@ -434,8 +478,8 @@ export default defineSim({
     const body = makePlayerBody(ctx.physics, spawn.x, spawn.y);
     state.players[id] = {
       name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y, prevX: spawn.x, prevY: spawn.y, body,
-      move: [0, 0], aimAngle: 0, weapon: 0, fire: false, smash: false,
-      fireCooldown: 0, smashCooldown: 0, score: 0, health: 100, invulnerable: 45,
+      move: [0, 0], aimAngle: 0, weapon: 0, inventory: [0, null, null, null, null], fire: false, smash: false, pickup: false, drop: false,
+      fireCooldown: 0, smashCooldown: 0, punchCooldown: 0, punchFlash: 0, score: 0, health: 100, invulnerable: 45,
       color: ctx.int(6), muzzleFlash: 0, shotSeq: 0, shotWeapon: 0,
       deathSeq: 0, deathX: spawn.x, deathY: spawn.y,
     };
@@ -456,6 +500,8 @@ export default defineSim({
     p.weapon = Math.max(0, Math.min(4, input.weapon | 0));
     p.fire = !!input.buttons.fire;
     p.smash = !!input.buttons.smash;
+    p.pickup = !!input.buttons.pickup;
+    p.drop = !!input.buttons.drop;
   },
 
   step(state, ctx) {
@@ -476,6 +522,8 @@ export default defineSim({
       p.prevX = p.x; p.prevY = p.y;
       if (p.fireCooldown > 0) p.fireCooldown--;
       if (p.smashCooldown > 0) p.smashCooldown--;
+      if (p.punchCooldown > 0) p.punchCooldown--;
+      if (p.punchFlash > 0) p.punchFlash--;
       if (p.invulnerable > 0) p.invulnerable--;
       if (p.muzzleFlash > 0) p.muzzleFlash--;
       let mx = p.move[0], my = p.move[1];
@@ -522,9 +570,27 @@ export default defineSim({
     }
     state.particles = liveParticles;
 
-    // Smash and weapon firing happen after the world step, using its latest positions.
+    // Inventory actions are authoritative and happen in the ordered simulation frame.
+    // A pickup is removed only after an empty slot has been found and filled.
     for (const id of Object.keys(state.players).sort()) {
       const p = state.players[id];
+      if (p.drop) {
+        const weaponId = p.inventory[p.weapon];
+        if (typeof weaponId === 'number') {
+          // Drop at the player's current position, with the weapon lying in their facing direction.
+          spawnWeaponPickup(state, weaponId, p.x, p.y, p.aimAngle + Math.PI / 2, ctx.frame);
+          p.inventory[p.weapon] = null;
+        }
+      }
+      if (p.pickup) {
+        const slot = freeInventorySlot(p);
+        const pickupIndex = slot >= 0 ? nearestPickupIndex(state, p) : -1;
+        if (slot >= 0 && pickupIndex >= 0) {
+          const pickup = state.pickups[pickupIndex];
+          p.inventory[slot] = pickup.weaponId;
+          state.pickups.splice(pickupIndex, 1);
+        }
+      }
       if (p.smash && p.smashCooldown <= 0) {
         p.smashCooldown = SMASH_COOLDOWN;
         for (const prop of state.props) {
@@ -533,12 +599,49 @@ export default defineSim({
           if (dx * dx + dy * dy <= SMASH_RANGE * SMASH_RANGE) destroyProp(state, ctx, prop, p);
         }
       }
-      if (p.fire && p.weapon >= 0 && p.weapon < WEAPONS.length && p.fireCooldown <= 0 && state.bullets.length < 350) {
-        const weapon = WEAPONS[p.weapon] || WEAPONS[0];
-        const muzzle = muzzlePosition(p);
+      const equippedWeaponId = p.inventory[p.weapon];
+      // Clicking/holding fire on an empty slot becomes a short-range punch, aimed toward the cursor.
+      if (p.fire && equippedWeaponId == null && p.punchCooldown <= 0 && !p.drop) {
+        p.punchCooldown = PUNCH_COOLDOWN;
+        p.punchFlash = 5;
+        const fx = Math.cos(p.aimAngle), fy = Math.sin(p.aimAngle);
+        for (const targetId of Object.keys(state.players).sort()) {
+          if (targetId === id) continue;
+          const target = state.players[targetId];
+          const dx = target.x - p.x, dy = target.y - p.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > PUNCH_RANGE * PUNCH_RANGE || dx * fx + dy * fy < 8) continue;
+          // Fists also stop at and hit the first player in reach; spawn protection blocks damage.
+          if (target.invulnerable <= 0) {
+            target.health -= PUNCH_DAMAGE;
+            const targetBody = bodyFromId(world, target.body);
+            if (targetBody) {
+              const v = targetBody.getLinearVelocity();
+              targetBody.setLinearVelocity(pl.Vec2(v.x + fx * 1.7, v.y + fy * 1.7));
+            }
+            if (target.health <= 0) {
+              const deadX = target.x, deadY = target.y;
+              target.deathX = deadX; target.deathY = deadY; target.deathSeq++;
+              p.score += 20;
+              const spawn = openSpawn(ctx, state, targetId);
+              target.x = spawn.x; target.y = spawn.y; target.prevX = spawn.x; target.prevY = spawn.y;
+              target.health = 100; target.invulnerable = 55; target.score = Math.max(0, target.score - 15);
+              if (targetBody) {
+                targetBody.setTransform(pl.Vec2(spawn.x / PPM, spawn.y / PPM), target.aimAngle + Math.PI / 2);
+                targetBody.setLinearVelocity(pl.Vec2(0, 0)); targetBody.setAngularVelocity(0);
+              }
+              addParticles(state, ctx, deadX, deadY, 'car', 8);
+            }
+          }
+          break;
+        }
+      }
+      if (p.fire && typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPONS.length && p.fireCooldown <= 0 && state.bullets.length < 350 && !p.drop) {
+        const weapon = WEAPONS[equippedWeaponId];
+        const muzzle = muzzlePosition(p, equippedWeaponId);
         p.fireCooldown = weapon.cooldown;
         p.muzzleFlash = 2;
-        p.shotWeapon = p.weapon;
+        p.shotWeapon = equippedWeaponId;
         p.shotSeq++;
         for (let pellet = 0; pellet < weapon.pellets && state.bullets.length < 350; pellet++) {
           const a = p.aimAngle + (ctx.rng() - 0.5) * weapon.spread;

@@ -49,3 +49,33 @@ Before publishing, test with two players, especially automatic-weapon fire, hits
 - Extended tree locations and reduced the circular trunk collider to 15×15 world pixels (7.5px radius) while retaining 128×128 canopy artwork.
 - Added 18 larger parked cars across the expanded map. They have six visual variants and no driving controls; they remain physics props that can be hit/destroyed.
 - Added a fifth inventory slot for empty hands. Selecting slot 5 hides the held weapon and the simulation does not create bullets while it is selected.
+
+## Update v9 — inventory, pickups and server browser
+
+- Players now spawn with a Glock-17 in slot 1. Slots 2–5 start empty and provide melee punches when fire is pressed.
+- The inventory stores five weapon IDs per player; item IDs are independent from slot indices.
+- Destroying a brown crate has a deterministic 55% chance to spawn an AK-47, M249, M134 Minigun or Shotgun as a ground pickup.
+- Press **E** to pick up the nearest ground weapon within 48 world pixels. An empty selected slot is used first; otherwise the first empty slot is used. If all five slots are occupied, the pickup remains on the ground.
+- Press **G** to drop the selected weapon at the player's position. Dropped weapons, including the Glock-17, can be picked up again.
+- The server browser heading is centered in the menu pane, with the modd.io region buttons directly beneath it.
+
+## Update v9 controls
+
+- **WASD / arrow keys:** Move
+- **Mouse / F:** Fire the selected weapon, or punch if the selected slot is empty
+- **1–5 / click a slot:** Select inventory slot
+- **E:** Pick up a nearby weapon
+- **G:** Drop the weapon in the selected slot
+- **Space:** Smash nearby props and crates
+- **M:** Return to the game menu
+
+## Verification
+
+The source passed a local TypeScript no-emit check. A separate smoke test imported the compiled simulation using a local mock of the modd.io/Planck module and confirmed the Glock-only starting inventory, slot fallback on pickup, pickup to an empty selected slot, drop and re-pickable ground item, inability to pick up with a full inventory, melee damage from an empty slot, and deterministic crate weapon drops. This mock is not the official modd.io runtime and does not validate production netcode or actual Planck contacts.
+
+Run the official checks in the project directory before publishing:
+
+```sh
+npx moddio test
+npx moddio dev
+```

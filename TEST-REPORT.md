@@ -45,3 +45,16 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3`,
 - Parked vehicles are enlarged to 92×44px fixtures and rendered in six non-drivable visual variants.
 - Main menu now builds a local half-resolution city preview and applies blur/vignette; server list and action buttons are laid out responsively inside the menu panel.
 - The official modd.io `npx moddio test` and live multiplayer/browser run have not been performed in this environment.
+
+
+## Update v9 — inventory and weapon pickups
+
+- TypeScript no-emit compilation passed for `sim.ts`, `server.ts`, and `client/main.ts` using the local SDK ambient declarations.
+- A compiled simulation smoke test with a lightweight mock world passed checks for: the Glock-17-only starter inventory; routing pickup to an empty selected slot; falling back to another empty slot when the selected slot is occupied; dropping the selected weapon at the player and clearing the slot; keeping a pickup on the ground when the inventory is full; punching and damaging a nearby player from an empty slot without spawning a bullet; and a deterministic crate destruction roll spawning one of the collectible weapons.
+- Source checks passed for pickup/drop inputs, world pickup rendering, 55% crate drop chance, Glock-compatible weapon dropping, dynamic inventory HUD and centered `AVAILABLE SERVERS` heading.
+- `moddio.json` and `package.json` parse as valid JSON. Asset paths and ZIP integrity are checked when packaging.
+
+## Not performed for v9
+
+- Official `npx moddio test` or `npx moddio play` against the actual SDK runtime.
+- A live-browser test with two networked clients. The smoke harness uses a local fake Planck-compatible world, not modd.io's production physics and lockstep implementation.
