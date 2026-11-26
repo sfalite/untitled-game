@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This is an A/B rendering prototype, not a gameplay or netcode rewrite. Canvas2D remains the baseline and is the default. Press N in a match to toggle PixiJS for the static floor and building layer only; press N again to return. F3 shows the renderer state. N toggles the prototype.
+This is an A/B rendering prototype, not a gameplay or netcode rewrite. Canvas2D remains the baseline and is the default. Press N in a match to toggle PixiJS for the static floor and building layer only; press N again to return. The always-visible renderer badge reports the active mode. Pixi mode adds a cyan outline to buildings as a deliberate test marker, so the A/B change is unmistakable. F3 shows the renderer state and the initialization/render error, if any.
 
 ## What Pixi renders
 
@@ -26,3 +26,11 @@ The game package pins `pixi.js` to version `8.23.0`. The current environment cou
 - Package JSON parse and zip integrity: passed.
 - Full SDK compile/browser runtime with real PixiJS package: not run because the npm registry was unreachable in this environment.
 - No multiplayer simulation files were changed.
+
+
+## v28 visibility fix
+
+- Added a persistent on-screen state badge: Canvas2D, initializing, PixiJS active, or failure.
+- Added cyan outlines on buildings only while PixiJS is active, to make the test mode immediately visible. These outlines are diagnostic decoration, not collision changes.
+- F3 now includes the PixiJS error message if initialization or rendering fails.
+- The expected artwork is otherwise intentionally similar because both renderers use the same map and source assets; PixiJS is a rendering path, not a new art pack.

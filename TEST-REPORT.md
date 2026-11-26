@@ -26,3 +26,12 @@
 - Project/dependency JSON parse: passed.
 - ZIP integrity: passed.
 - Official `moddio test` / `moddio play` not run; npm registry access failed with `EAI_AGAIN`, so the PixiJS package bundle and WebGL runtime are not verified here. If the SDK build needs the package lock, run `npx moddio add pixi.js@8.23.0` with registry access, commit the generated lock file, then test the renderer toggle in modd.io.
+
+
+## v28 follow-up: PixiJS mode was not visually obvious
+
+- User feedback: no noticeable difference after switching renderers.
+- Root cause in intended design: the v27 prototype deliberately reused the same map/assets and rendered only static floor/buildings, so the appearance could be very similar. There was also no persistent on-screen state indicator.
+- v28 adds a persistent renderer status badge, a visible cyan building-edge test marker while PixiJS is active, and an F3 line with any captured Pixi initialization/render error.
+- This makes it possible to distinguish “PixiJS active but visually similar” from “PixiJS failed and Canvas2D fallback stayed active.”
+- Still requires runtime verification in modd.io; the Pixi npm dependency/runtime bundle was not executed in this container.

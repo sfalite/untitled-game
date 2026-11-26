@@ -33,3 +33,8 @@ The game remains on the existing Canvas2D renderer by default. During a match, p
 The prototype initializes lazily only when N (or F6, if forwarded) is pressed. If WebGL or the Pixi renderer fails to initialize/render, it falls back to Canvas2D. The implementation does not modify `sim.ts` and does not add a second network, physics or projectile system.
 
 PixiJS is pinned to `8.23.0` in `npm/package.json`. The SDK normally manages its npm dependency using `npx moddio add pixi.js@8.23.0`; if the project build asks for a generated lockfile, run that command once from the project folder with npm registry access, then commit the generated `npm/package-lock.json`. No CDN or external runtime fetch is used.
+
+
+## PixiJS A/B renderer visibility (v28)
+
+Press N during a match. The on-screen badge directly reports `CANVAS2D BASELINE`, `PIXIJS INITIALIZING`, `PIXIJS WEBGL ACTIVE`, or a failure state. When PixiJS is active, building edges are temporarily outlined in cyan to make the mode easy to identify. Press N again to return to the baseline renderer. F3 shows the detailed renderer status and any captured Pixi initialization error.
