@@ -24,6 +24,41 @@ const WEAPON_COLORS = ['#ffe07a', '#ffd16a', '#ffb347', '#ff8f53', '#fff0b0'];
 // Keep in sync with sim.ts so a rendered barrel and its authoritative shot share an origin.
 const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 24, 25];
 const WEAPON_MUZZLE_SIDE = 8;
+// Render-only local projectile prediction. The server still owns collisions and damage;
+// this layer prevents the local player's bullets from appearing one network round-trip late.
+const CLIENT_TICK_MS = 50; // sim.ts runs at 20 Hz
+const CLIENT_WEAPON_RULES = [
+  { speed: 18, life: 34, spread: 0.035, pellets: 1, cooldown: 8, color: '#ffe07a' },
+  { speed: 18, life: 36, spread: 0.045, pellets: 1, cooldown: 7, color: '#ffd16a' },
+  { speed: 18, life: 36, spread: 0.065, pellets: 1, cooldown: 3, color: '#ffb347' },
+  { speed: 19, life: 36, spread: 0.11, pellets: 1, cooldown: 3, color: '#ff8f53' },
+  { speed: 15, life: 28, spread: 0.25, pellets: 5, cooldown: 12, color: '#fff0b0' },
+] as const;
+type LocalPredictedBullet = {
+  id: number;
+  shotToken: number;
+  weaponId: number;
+  pelletIndex: number;
+  startX: number;
+  startY: number;
+  vx: number; // game pixels per simulation tick, matching sim.ts
+  vy: number;
+  angle: number;
+  color: string;
+  bornAt: number;
+  maxAgeMs: number;
+  authoritativeId?: number;
+};
+let localPredictedBullets: LocalPredictedBullet[] = [];
+let nextLocalPredictedBulletId = 1;
+let localShotToken = 0;
+let localNextShotAt = 0;
+let latestLocalInventory: Array<number | null> = [0, null, null, null, null];
+let localPredictedMuzzleUntil = 0;
+let localPredictedMuzzleWeapon = -1;
+let latestLocalAimAngle = 0;
+type PendingPredictedAudio = { shotToken: number; weaponId: number; at: number };
+let pendingPredictedAudio: PendingPredictedAudio[] = [];
 const PLAYER_COLORS = ['#55d6ff', '#ff6b6b', '#ffd166', '#c792ea', '#6ee7a8', '#ff9f43'];
 
 const BUILDINGS = [
@@ -147,8 +182,8 @@ const [atlas, playerSprite, treeSprite] = await Promise.all([
   loadImage('assets/trees/tree.png'),
 ]);
 
-// Locally bundled sound effects. Every audible weapon sound is triggered by the simulation's shotSeq,
-// so audio follows an actual bullet event instead of looping a long sample out of sync.
+// Locally bundled sound effects. The local player gets immediate one-shot audio on a predicted
+// input; the authority's shot token prevents confirmation from playing it twice.
 function makeAudioPool(src: string, count: number, volume = 0.42): HTMLAudioElement[] {
   return Array.from({ length: count }, () => {
     const audio = new Audio(src);
@@ -208,19 +243,28 @@ function playShotSound(weapon: number): void {
     playPooledShot(rifleVoices, 'rifle');
   }
 }
-function updateWeaponAudio(player: any): void {
-  const seq = Number(player.shotSeq || 0);
+function updateWeaponAudio(player: any, confirmedSeqValue: number, now: number): void {
+  const seq = Math.max(0, Math.floor(Number(confirmedSeqValue) || 0));
+  const confirmedToken = Math.max(0, Math.floor(Number(player?.lastFiredClientShotToken) || 0));
   if (lastObservedShotSeq < 0) {
     lastObservedShotSeq = seq;
+    pendingPredictedAudio = pendingPredictedAudio.filter((shot) => now - shot.at < 5000);
     return;
   }
   if (seq > lastObservedShotSeq) {
-    // If a display frame was skipped, catch up a few fire ticks without flooding the audio queue.
-    const missedShots = Math.min(4, seq - lastObservedShotSeq);
-    const weapon = Number.isFinite(player.shotWeapon) ? player.shotWeapon : Number(player.weapon || 0);
-    for (let i = 0; i < missedShots; i++) playShotSound(weapon);
+    // Client tokens identify the actual accepted input shot, so a rejected local prediction can
+    // never consume the audio credit for a later authoritative shot.
+    const predictedCredit = pendingPredictedAudio.some((shot) => shot.shotToken === confirmedToken);
+    if (!predictedCredit) {
+      const missedCount = Math.min(3, seq - lastObservedShotSeq);
+      for (let i = 0; i < missedCount; i++) playShotSound(Number(player?.shotWeapon) || 0);
+    }
+    pendingPredictedAudio = pendingPredictedAudio.filter((shot) =>
+      shot.shotToken > confirmedToken && now - shot.at < 5000);
     lastObservedShotSeq = seq;
   }
+  pendingPredictedAudio = pendingPredictedAudio.filter((shot) =>
+    shot.shotToken > confirmedToken && now - shot.at < 5000);
 }
 
 // Death scream is spatial: its origin is the position stored at the death frame, not the respawn point.
@@ -548,9 +592,13 @@ function drawWeaponIcon(ctx: CanvasRenderingContext2D, x: number, y: number, wea
   drawWeaponShape(ctx, weapon);
   ctx.restore();
 }
-function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: number): void {
-  if (!(player.muzzleFlash > 0) || player.shotWeapon !== weaponId) return;
-  const alpha = Math.min(1, player.muzzleFlash / 2);
+function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: number, forcePredictedFlash = false): void {
+  const now = performance.now();
+  const predictedFlash = forcePredictedFlash && weaponId === localPredictedMuzzleWeapon && now < localPredictedMuzzleUntil;
+  if (!predictedFlash && (!(player.muzzleFlash > 0) || player.shotWeapon !== weaponId)) return;
+  const alpha = predictedFlash
+    ? clampNumber((localPredictedMuzzleUntil - now) / 110, 0, 1)
+    : Math.min(1, player.muzzleFlash / 2);
   const radius = weaponId === 3 ? 8 : weaponId === 4 ? 7 : 5.5;
   const barrelLength = WEAPON_MUZZLE_FORWARD[weaponId] ?? WEAPON_MUZZLE_FORWARD[0];
   ctx.save(); ctx.globalAlpha = alpha; ctx.translate(WEAPON_MUZZLE_SIDE, -barrelLength);
@@ -564,12 +612,192 @@ function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: n
   ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0, 0, radius * 0.42, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
+function resetLocalShotPrediction(): void {
+  localPredictedBullets = [];
+  nextLocalPredictedBulletId = 1;
+  localShotToken = 0;
+  localNextShotAt = 0;
+  latestLocalInventory = [0, null, null, null, null];
+  localPredictedMuzzleUntil = 0;
+  localPredictedMuzzleWeapon = -1;
+  latestLocalAimAngle = 0;
+  aimCameraReady = false;
+  pendingPredictedAudio = [];
+  lastObservedShotSeq = -1;
+}
+function clientMuzzlePosition(player: any, weaponId: number): { x: number; y: number } {
+  // Must remain identical to muzzlePosition() in sim.ts and drawWeaponLocal().
+  const angle = Number.isFinite(Number(player.aimAngle)) ? Number(player.aimAngle) : 0;
+  const forward = WEAPON_MUZZLE_FORWARD[weaponId] ?? WEAPON_MUZZLE_FORWARD[0];
+  return {
+    x: Number(player.x) + Math.cos(angle) * forward - Math.sin(angle) * WEAPON_MUZZLE_SIDE,
+    y: Number(player.y) + Math.sin(angle) * forward + Math.cos(angle) * WEAPON_MUZZLE_SIDE,
+  };
+}
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+function predictedBulletAtTime(bullet: LocalPredictedBullet, now: number): { x: number; y: number; ageTicks: number } {
+  const ageTicks = Math.max(0, (now - bullet.bornAt) / CLIENT_TICK_MS);
+  return {
+    x: bullet.startX + bullet.vx * ageTicks,
+    y: bullet.startY + bullet.vy * ageTicks,
+    ageTicks,
+  };
+}
+function authoritativeBulletAtLocalTime(bullet: any, predicted: LocalPredictedBullet, now: number): { x: number; y: number } {
+  // The SDK interpolates confirmed state behind the locally predicted player. Use the bullet's
+  // own simulation age to extrapolate its fixed-velocity segment to the local render time. This
+  // is a straight-line extrapolation, never a correction toward the shooter's current muzzle.
+  const localAgeTicks = Math.max(0, (now - predicted.bornAt) / CLIENT_TICK_MS);
+  const authoritativeAge = Number.isFinite(Number(bullet.age)) ? Number(bullet.age) : 0;
+  const deltaTicks = clampNumber(localAgeTicks - authoritativeAge, -8, 15);
+  return {
+    x: Number(bullet.x) + Number(bullet.vx) * deltaTicks,
+    y: Number(bullet.y) + Number(bullet.vy) * deltaTicks,
+  };
+}
+function addPredictedShot(player: any, shotToken: number, now: number): void {
+  const weaponId = Number.isFinite(Number(player.shotWeapon)) ? Number(player.shotWeapon) : -1;
+  const rule = CLIENT_WEAPON_RULES[weaponId];
+  if (!rule) return;
+  const muzzle = clientMuzzlePosition(player, weaponId);
+  const aimAngle = Number.isFinite(Number(player.aimAngle)) ? Number(player.aimAngle) : 0;
+  for (let pelletIndex = 0; pelletIndex < rule.pellets; pelletIndex++) {
+    // This only predicts the local visual. The authoritative projectile and its spread are
+    // matched as soon as the room sends them; collisions and damage always come from sim.ts.
+    const spreadOffset = rule.pellets > 1
+      ? ((pelletIndex / (rule.pellets - 1)) - 0.5) * rule.spread
+      : 0;
+    const angle = aimAngle + spreadOffset;
+    localPredictedBullets.push({
+      id: nextLocalPredictedBulletId++, shotToken, weaponId, pelletIndex,
+      startX: muzzle.x, startY: muzzle.y,
+      vx: Math.cos(angle) * rule.speed,
+      vy: Math.sin(angle) * rule.speed,
+      angle, color: rule.color,
+      bornAt: now,
+      maxAgeMs: rule.life * CLIENT_TICK_MS + 120,
+    });
+  }
+}
+function predictLocalShotFromInput(fireDown: boolean, aimAngle: number, now: number, dropDown = false): void {
+  if (!fireDown || dropDown || mode !== 'game' || !aimCameraReady) return;
+  const weaponId = latestLocalInventory[selectedWeapon];
+  // Empty inventory slots use the melee system and must not create gunshot visuals/audio.
+  if (typeof weaponId !== 'number' || weaponId < 0 || weaponId >= CLIENT_WEAPON_RULES.length) return;
+  if (now < localNextShotAt) return;
+  const rule = CLIENT_WEAPON_RULES[weaponId];
+  localNextShotAt = now + rule.cooldown * CLIENT_TICK_MS;
+  // This token is included in the actual SDK input. The authoritative sim tags the resulting
+  // bullet with the same token, giving each local tracer a reliable identity even at high ping.
+  localShotToken = (localShotToken + 1) >>> 0;
+  if (localShotToken === 0) localShotToken = 1;
+  const shotToken = localShotToken;
+  const shotPlayer = { x: localPos.x, y: localPos.y, aimAngle, shotWeapon: weaponId };
+  addPredictedShot(shotPlayer, shotToken, now);
+  pendingPredictedAudio.push({ shotToken, weaponId, at: now });
+  if (pendingPredictedAudio.length > 100) pendingPredictedAudio.splice(0, pendingPredictedAudio.length - 100);
+  localPredictedMuzzleWeapon = weaponId;
+  localPredictedMuzzleUntil = now + 110;
+  // Sound, muzzle flash and tracer start on local input; confirmation later prevents duplicate audio.
+  playShotSound(weaponId);
+}
+
+function drawBulletGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, alpha = 1): void {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = color || '#ffd16a';
+  ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,240,170,.32)'; ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawSynchronizedBullets(
+  ctx: CanvasRenderingContext2D,
+  bulletsInput: any[],
+  playerId: string,
+  confirmedShotToken: number,
+  now: number,
+): void {
+  const bullets = Array.isArray(bulletsInput) ? bulletsInput : [];
+  const authoritativeById = new Map<number, any>();
+  for (const b of bullets) if (Number.isFinite(Number(b.id))) authoritativeById.set(Number(b.id), b);
+
+  // Once a predicted shot has an authoritative bullet id, keep only that exact source alive.
+  // When the authoritative projectile is removed by a collision, its visual disappears too.
+  localPredictedBullets = localPredictedBullets.filter((b) =>
+    b.authoritativeId == null || authoritativeById.has(b.authoritativeId));
+
+  // Match by the input shot token and pellet index, never by nearest screen position or angle.
+  // This remains correct if local prediction and confirmed shotSeq temporarily diverge.
+  const localAuthoritative = bullets
+    .filter((b) => b.owner === playerId && !localPredictedBullets.some((p) => p.authoritativeId === Number(b.id)))
+    .slice()
+    .sort((a, b) => (Number(a.bornFrame) - Number(b.bornFrame)) || (Number(a.id) - Number(b.id)));
+  for (const auth of localAuthoritative) {
+    if (!Number.isFinite(Number(auth.shotToken)) || !Number.isFinite(Number(auth.pelletIndex))) continue;
+    const predicted = localPredictedBullets.find((candidate) =>
+      candidate.authoritativeId == null
+      && candidate.shotToken === Number(auth.shotToken)
+      && candidate.pelletIndex === Number(auth.pelletIndex));
+    if (predicted) predicted.authoritativeId = Number(auth.id);
+  }
+
+  const attachedIds = new Set<number>();
+  for (const b of bullets) {
+    if (b.owner === playerId) {
+      const matched = localPredictedBullets.find((p) => p.authoritativeId === Number(b.id));
+      if (matched) {
+        attachedIds.add(Number(b.id));
+        // The room's fixed-velocity trajectory wins as soon as it arrives. We extrapolate its
+        // own age to the local render time, then draw it directly on that line. No moving-muzzle
+        // attachment or blended positional nudge is allowed after confirmation.
+        const authPos = authoritativeBulletAtLocalTime(b, matched, now);
+        drawBulletGlyph(ctx, authPos.x, authPos.y, b.color || matched.color);
+      } else {
+        // If prediction was rolled back or the metadata is absent, still draw the authoritative
+        // bullet where the simulation says it is rather than inventing a visual trajectory.
+        drawBulletGlyph(ctx, Number(b.x), Number(b.y), b.color || '#ffd16a');
+      }
+    } else {
+      // Remote bullets remain on the same interpolated authoritative timeline as remote players.
+      drawBulletGlyph(ctx, Number(b.x), Number(b.y), b.color || '#ffd16a');
+    }
+  }
+
+  const remaining: LocalPredictedBullet[] = [];
+  for (const predicted of localPredictedBullets) {
+    if (predicted.authoritativeId != null) {
+      if (attachedIds.has(predicted.authoritativeId)) remaining.push(predicted);
+      continue;
+    }
+    const ageMs = now - predicted.bornAt;
+    if (ageMs >= predicted.maxAgeMs) continue;
+    // If the local prediction has not been confirmed within an RTT/lead-sized window, stop
+    // showing the provisional tracer. The shot may have been rejected by a cooldown, full bullet
+    // budget, a simultaneous drop, or a rollback; never keep a speculative bullet flying forever.
+    if (confirmedShotToken >= predicted.shotToken && ageMs > 180) continue;
+    if (ageMs > 900 && confirmedShotToken < predicted.shotToken) continue;
+    const fade = ageMs > predicted.maxAgeMs - 100
+      ? clampNumber((predicted.maxAgeMs - ageMs) / 100, 0, 1)
+      : 1;
+    const point = predictedBulletAtTime(predicted, now);
+    drawBulletGlyph(ctx, point.x, point.y, predicted.color, fade);
+    remaining.push(predicted);
+  }
+  localPredictedBullets = remaining;
+}
+
 function drawGame(state: any, self: any, playerId: string): void {
   const ctx = view.begin('#7eb47a');
   const s: any = mergeSelf(state, self, 'players', playerId);
   if (!s || !s.players || !s.players[playerId]) return;
   const mine = s.players[playerId];
-  updateWeaponAudio(mine);
+  const renderNow = performance.now();
+  const confirmedMine = state?.players?.[playerId] || mine;
+  const confirmedShotSeq = Math.max(0, Math.floor(Number(confirmedMine.shotSeq) || 0));
+  latestLocalInventory = Array.isArray(mine.inventory) ? mine.inventory.slice() : [0, null, null, null, null];
+  updateWeaponAudio(confirmedMine, confirmedShotSeq, renderNow);
   updateDeathAudio(s.players, mine, playerId);
   // With predict:'self', the local player's movement is predicted while remote players are
   // smoothly interpolated from authoritative room frames. Bullet positions remain authoritative
@@ -595,46 +823,52 @@ function drawGame(state: any, self: any, playerId: string): void {
   drawWallsLayer(ctx, visible);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
-  for (const b of s.bullets || []) {
-    // The sim owns x/y and velocity for every bullet. Never offset it to the shooter's
-    // current muzzle: the shooter may have moved or rotated since this shot was created.
-    ctx.fillStyle = b.color || '#ffd16a';
-    ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(255,240,170,.32)'; ctx.beginPath(); ctx.arc(b.x, b.y, 8, 0, Math.PI * 2); ctx.fill();
-  }
+  // Local shots are predicted immediately for responsive visuals, then associated with the
+  // authoritative projectile id and reconciled to its fixed-velocity path. Damage/collisions
+  // remain exclusively in sim.ts; remote projectiles stay on the interpolated room timeline.
+  drawSynchronizedBullets(
+    ctx, s.bullets || [], playerId,
+    Math.max(0, Math.floor(Number(confirmedMine.lastFiredClientShotToken) || 0)), renderNow,
+  );
   for (const p of s.particles || []) {
     const alpha = Math.max(0.08, Math.min(1, p.life / 25));
     ctx.save(); ctx.globalAlpha = alpha; ctx.translate(p.x, p.y); ctx.rotate(p.rotation || 0);
     ctx.fillStyle = p.color; ctx.fillRect(-p.size / 2, -p.size / 2, p.size, Math.max(2, p.size * 0.7)); ctx.restore();
   }
   for (const [id, p] of Object.entries(s.players) as [string, any][]) {
-    ctx.save(); ctx.translate(p.x, p.y);
-    if (p.invulnerable > 0 && Math.floor(p.invulnerable / 4) % 2 === 0) ctx.globalAlpha = 0.5;
+    // Render the local player's orientation from the latest cursor sample so the weapon, muzzle
+    // flash and predicted bullet use one angle even between the 20 Hz simulation ticks.
+    const renderPlayer = id === playerId ? { ...p, aimAngle: latestLocalAimAngle } : p;
+    ctx.save(); ctx.translate(renderPlayer.x, renderPlayer.y);
+    if (renderPlayer.invulnerable > 0 && Math.floor(renderPlayer.invulnerable / 4) % 2 === 0) ctx.globalAlpha = 0.5;
     ctx.fillStyle = 'rgba(20,30,35,.24)'; ctx.beginPath(); ctx.ellipse(0, 13, 20, 10, 0, 0, Math.PI * 2); ctx.fill();
     // The provided sprite faces up by default, so rotate by the aim angle plus 90 degrees.
     // Keep its source dimensions exactly 43×35 world pixels instead of stretching it.
-    ctx.rotate((p.aimAngle || 0) + Math.PI / 2);
+    ctx.rotate((renderPlayer.aimAngle || 0) + Math.PI / 2);
     if (imageReady(playerSprite)) {
       const oldSmoothing = ctx.imageSmoothingEnabled;
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(playerSprite, -21.5, -17.5, 43, 35);
       ctx.imageSmoothingEnabled = oldSmoothing;
     } else {
-      ctx.fillStyle = PLAYER_COLORS[p.color % PLAYER_COLORS.length]; ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = PLAYER_COLORS[renderPlayer.color % PLAYER_COLORS.length]; ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
     }
     // The selected field is a slot index; the item in that slot is the actual weapon ID.
     // Empty slots rely on the character sprite's built-in hands; no extra fist layer is drawn.
-    const equippedWeaponId = Array.isArray(p.inventory) ? p.inventory[p.weapon] : 0;
+    const equippedWeaponId = Array.isArray(renderPlayer.inventory) ? renderPlayer.inventory[id === playerId ? selectedWeapon : renderPlayer.weapon] : 0;
     if (typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPON_NAMES.length) {
       drawWeaponLocal(ctx, equippedWeaponId, 1);
-      drawMuzzleSpark(ctx, p, equippedWeaponId);
+      const localPredictedFlash = id === playerId
+        && renderNow < localPredictedMuzzleUntil
+        && localPredictedMuzzleWeapon === equippedWeaponId;
+      drawMuzzleSpark(ctx, renderPlayer, equippedWeaponId, localPredictedFlash);
     }
     ctx.restore();
     ctx.fillStyle = '#16252c'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText(String(p.name || 'Player').slice(0, 18), p.x, p.y - 27);
-    if (p.health < 100) {
-      ctx.fillStyle = 'rgba(10,20,24,.75)'; roundRect(ctx, p.x - 20, p.y - 22, 40, 5, 3);
-      ctx.fillStyle = '#31d879'; roundRect(ctx, p.x - 19, p.y - 21, 38 * Math.max(0,p.health) / 100, 3, 2);
+    ctx.fillText(String(renderPlayer.name || 'Player').slice(0, 18), renderPlayer.x, renderPlayer.y - 27);
+    if (renderPlayer.health < 100) {
+      ctx.fillStyle = 'rgba(10,20,24,.75)'; roundRect(ctx, renderPlayer.x - 20, renderPlayer.y - 22, 40, 5, 3);
+      ctx.fillStyle = '#31d879'; roundRect(ctx, renderPlayer.x - 19, renderPlayer.y - 21, 38 * Math.max(0,renderPlayer.health) / 100, 3, 2);
     }
   }
   // Trees are drawn as the foreground trees layer from the user's 128x128 sprite.
@@ -1071,6 +1305,7 @@ function cursorWorldPosition(): { x: number; y: number } {
 }
 
 async function startWorker(): Promise<void> {
+  resetLocalShotPrediction();
   const game = await playInWorker({
     input: () => {
       if (keys.pressed('1')) selectedWeapon = 0;
@@ -1080,16 +1315,22 @@ async function startWorker(): Promise<void> {
       if (keys.pressed('5')) selectedWeapon = 4;
       const pointer = cursorWorldPosition();
       const angle = aimCameraReady ? Math.atan2(pointer.y - localPos.y, pointer.x - localPos.x) : 0;
+      latestLocalAimAngle = angle;
       const positiveAngle = angle < 0 ? angle + Math.PI * 2 : angle;
       let aim = Math.round((positiveAngle / (Math.PI * 2)) * 65535);
       if (!Number.isFinite(aim)) aim = 0;
       aim = Math.max(0, Math.min(65535, aim));
       const [mx, my] = keys.move();
       const pressedFire = (keys.mouse.down && weaponSlotAt(keys.mouse.x, keys.mouse.y) < 0) || keys.keys.has('f');
+      // Client prediction is render-only: it makes the muzzle flash, tracer and sound immediate.
+      // The input still goes through the SDK's normal lead/prediction pipeline; we deliberately do
+      // not disable inputLead because the SDK documents that as the no-prediction mode.
+      predictLocalShotFromInput(pressedFire, angle, performance.now(), keys.keys.has('g'));
       return {
         move: [Math.round(mx * 127), Math.round(my * 127)],
         aim,
         weapon: selectedWeapon,
+        shotToken: localShotToken,
         buttons: { fire: pressedFire, smash: keys.pressed(' '), pickup: keys.keys.has('e'), drop: keys.keys.has('g') },
       };
     },
@@ -1111,6 +1352,7 @@ async function startWorker(): Promise<void> {
 async function enterMenu(): Promise<void> {
   if (mode !== 'game') return;
   stopAllWeaponAudio();
+  resetLocalShotPrediction();
   lastObservedShotSeq = -1;
   mode = 'leaving';
   try {
