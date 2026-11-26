@@ -154,12 +154,14 @@ function makeAudioPool(src: string, count: number, volume = 0.42): HTMLAudioElem
     return audio;
   });
 }
+const pistolVoices = makeAudioPool('assets/audio/fire_pistol.mp3', 6, 0.42);
 const rifleVoices = makeAudioPool('assets/audio/fire_rifle.mp3', 6);
 const minigunVoices = makeAudioPool('assets/audio/fire_minigun.mp3', 6);
 const shotgunAudio = new Audio('assets/audio/fire_shotgun.mp3');
 shotgunAudio.preload = 'auto';
 shotgunAudio.volume = 0.42;
 shotgunAudio.loop = false;
+let pistolVoiceCursor = 0;
 let rifleVoiceCursor = 0;
 let minigunVoiceCursor = 0;
 let lastObservedShotSeq = -1;
@@ -167,23 +169,30 @@ function safePlay(audio: HTMLAudioElement): void {
   const playPromise = audio.play();
   if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
 }
-function playPooledShot(pool: HTMLAudioElement[], cursor: 'rifle' | 'minigun'): void {
+function playPooledShot(pool: HTMLAudioElement[], cursor: 'pistol' | 'rifle' | 'minigun'): void {
   if (!pool.length) return;
-  const index = cursor === 'rifle' ? rifleVoiceCursor++ % pool.length : minigunVoiceCursor++ % pool.length;
+  const index = cursor === 'pistol'
+    ? pistolVoiceCursor++ % pool.length
+    : cursor === 'rifle'
+      ? rifleVoiceCursor++ % pool.length
+      : minigunVoiceCursor++ % pool.length;
   const audio = pool[index];
   audio.pause();
   try { audio.currentTime = 0; } catch {}
   safePlay(audio);
 }
 function stopAllWeaponAudio(): void {
-  for (const audio of [...rifleVoices, ...minigunVoices, shotgunAudio]) {
+  for (const audio of [...pistolVoices, ...rifleVoices, ...minigunVoices, shotgunAudio]) {
     audio.pause();
     try { audio.currentTime = 0; } catch {}
   }
   lastObservedShotSeq = -1;
 }
 function playShotSound(weapon: number): void {
-  if (weapon === 3) {
+  if (weapon === 0) {
+    // Glock-17 uses its own bundled pistol sound. A voice pool allows rapid shots to overlap cleanly.
+    playPooledShot(pistolVoices, 'pistol');
+  } else if (weapon === 3) {
     playPooledShot(minigunVoices, 'minigun');
   } else if (weapon === 4) {
     // Keep the shotgun's original sample and timing.
@@ -191,7 +200,7 @@ function playShotSound(weapon: number): void {
     try { shotgunAudio.currentTime = 0; } catch {}
     safePlay(shotgunAudio);
   } else {
-    // Glock-17, AK-47 and M249 share the bundled rifle sample until a pistol-specific sample exists.
+    // AK-47 and M249 share the rifle sample.
     playPooledShot(rifleVoices, 'rifle');
   }
 }
@@ -498,15 +507,6 @@ function drawWeaponShape(ctx: CanvasRenderingContext2D, weapon: number): void {
     ctx.fillStyle = '#a96d39'; ctx.fillRect(-3, 3, 6, 5);
   }
 }
-function drawFistsIcon(ctx: CanvasRenderingContext2D, x: number, y: number, scale = 1, color = '#9cb0ad'): void {
-  ctx.save(); ctx.translate(x, y); ctx.scale(scale, scale);
-  ctx.fillStyle = color; ctx.strokeStyle = '#233239'; ctx.lineWidth = 1.2;
-  roundRect(ctx, -9, -4, 7, 12, 2);
-  roundRect(ctx, 2, -4, 7, 12, 2);
-  roundRect(ctx, -10, -8, 8, 7, 2);
-  roundRect(ctx, 2, -8, 8, 7, 2);
-  ctx.restore();
-}
 function drawWeaponPickup(ctx: CanvasRenderingContext2D, pickup: any): void {
   ctx.save();
   ctx.translate(pickup.x, pickup.y);
@@ -517,7 +517,9 @@ function drawWeaponPickup(ctx: CanvasRenderingContext2D, pickup: any): void {
   ctx.restore();
 }
 function drawWeaponLocal(ctx: CanvasRenderingContext2D, weapon: number, scale = 1): void {
-  ctx.save(); ctx.translate(8, 4); ctx.scale(scale, scale);
+  // The Glock is shorter than the other weapons. Move its grip/barrel forward relative to
+  // the sprite's built-in right hand so it no longer appears buried in the hand layer.
+  ctx.save(); ctx.translate(8, weapon === 0 ? -1 : 4); ctx.scale(scale, scale);
   drawWeaponShape(ctx, weapon);
   ctx.restore();
 }
@@ -530,7 +532,7 @@ function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: n
   if (!(player.muzzleFlash > 0) || player.shotWeapon !== weaponId) return;
   const alpha = Math.min(1, player.muzzleFlash / 2);
   const radius = weaponId === 3 ? 8 : weaponId === 4 ? 7 : 5.5;
-  const barrelLength = weaponId === 0 ? 15 : weaponId === 3 ? 27 : 25;
+  const barrelLength = weaponId === 0 ? 18 : weaponId === 3 ? 27 : 25;
   ctx.save(); ctx.globalAlpha = alpha; ctx.translate(8, -barrelLength);
   ctx.fillStyle = '#fff6b0'; ctx.strokeStyle = '#ffac42'; ctx.lineWidth = 2;
   ctx.beginPath();
@@ -605,17 +607,11 @@ function drawGame(state: any, self: any, playerId: string): void {
       ctx.fillStyle = PLAYER_COLORS[p.color % PLAYER_COLORS.length]; ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
     }
     // The selected field is a slot index; the item in that slot is the actual weapon ID.
-    // Empty slots show fists only: no gun is attached to the player's hand.
+    // Empty slots rely on the character sprite's built-in hands; no extra fist layer is drawn.
     const equippedWeaponId = Array.isArray(p.inventory) ? p.inventory[p.weapon] : 0;
     if (typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPON_NAMES.length) {
       drawWeaponLocal(ctx, equippedWeaponId, 1);
       drawMuzzleSpark(ctx, p, equippedWeaponId);
-    } else if (p.punchFlash > 0) {
-      // A small fist lunge makes the empty-slot melee action visible to all clients.
-      ctx.save(); ctx.translate(8, -12 - (5 - Math.min(5, p.punchFlash)) * 2);
-      ctx.fillStyle = '#f2c7a2'; roundRect(ctx, -4, -6, 8, 11, 3);
-      ctx.fillStyle = '#d9a985'; roundRect(ctx, -5, -7, 10, 5, 2);
-      ctx.restore();
     }
     ctx.restore();
     ctx.fillStyle = '#16252c'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
@@ -768,11 +764,9 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
     const itemId = inventory[i];
     if (typeof itemId === 'number' && itemId >= 0 && itemId < WEAPON_NAMES.length) {
       drawWeaponIcon(ctx, x + slotW / 2, invY + 27, itemId, itemId === 0 ? 0.9 : 0.82);
-    } else {
-      drawFistsIcon(ctx, x + slotW / 2, invY + 25, 0.9, selected ? '#d4ffe3' : '#9cb0ad');
     }
     ctx.fillStyle = selected ? '#ffffff' : '#c5d2d6'; ctx.textAlign = 'center'; ctx.font = 'bold 9px system-ui';
-    ctx.fillText(typeof itemId === 'number' ? WEAPON_NAMES[itemId] : 'FISTS', x + slotW / 2, invY + slotH - 7, slotW - 5);
+    ctx.fillText(typeof itemId === 'number' ? WEAPON_NAMES[itemId] : 'EMPTY', x + slotW / 2, invY + slotH - 7, slotW - 5);
   }
   // Green rounded 100/100 health UI, centred at the bottom.
   const hpW = Math.min(280, w - 38), hpH = 40;
@@ -790,7 +784,7 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   }
   const nearestWorldPickup = (state.pickups || []).some((pickup: any) => {
     const dx = pickup.x - mine.x, dy = pickup.y - mine.y;
-    return dx * dx + dy * dy <= 48 * 48;
+    return dx * dx + dy * dy <= 64 * 64;
   });
   if (nearestWorldPickup) {
     const hasEmptySlot = Array.isArray(mine.inventory) && mine.inventory.some((itemId: any) => itemId == null);
@@ -982,9 +976,8 @@ function drawMenu(): void {
       const yy = panelY + 69 + i * 28;
       ctx.fillStyle = 'rgba(8,19,24,.72)'; roundRect(ctx, rightX + 14, yy, rightW - 28, 24, 6);
       if (i === 0) drawWeaponIcon(ctx, rightX + 31, yy + 12, 0, .55);
-      else drawFistsIcon(ctx, rightX + 31, yy + 12, .48, '#9cb0ad');
       ctx.fillStyle = i === 0 ? WEAPON_COLORS[0] : '#a8bab7'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
-      ctx.fillText(`${i + 1}. ${i === 0 ? name : 'EMPTY / FISTS'}`, rightX + 45, yy + 16, rightW - 60);
+      ctx.fillText(`${i + 1}. ${i === 0 ? name : 'EMPTY SLOT'}`, rightX + (i === 0 ? 45 : 16), yy + 16, rightW - (i === 0 ? 60 : 32));
     });
     const actionBottom = panelY + panelH - 12;
     const playY = actionBottom - 43;
@@ -1081,7 +1074,7 @@ async function startWorker(): Promise<void> {
         move: [Math.round(mx * 127), Math.round(my * 127)],
         aim,
         weapon: selectedWeapon,
-        buttons: { fire: pressedFire, smash: keys.pressed(' '), pickup: keys.pressed('e'), drop: keys.pressed('g') },
+        buttons: { fire: pressedFire, smash: keys.pressed(' '), pickup: keys.keys.has('e'), drop: keys.keys.has('g') },
       };
     },
   });
