@@ -14,37 +14,120 @@ const view = canvas2d(canvas);
 const keys = controls(canvas, { buttons: [{ key: 'f', label: 'FIRE' }, { key: ' ', label: 'SMASH' }, { key: 'm', label: 'MENU' }] });
 
 const TILE = 64;
-const COLS = 28;
-const ROWS = 24;
+const COLS = 42;
+const ROWS = 42;
 const WORLD_W = COLS * TILE;
 const WORLD_H = ROWS * TILE;
-const WEAPON_NAMES = ['AK-47', 'M249', 'M134 MINIGUN', 'SHOTGUN'];
-const WEAPON_COLORS = ['#ffd16a', '#ffb347', '#ff8f53', '#fff0b0'];
+const WEAPON_NAMES = ['AK-47', 'M249', 'M134 MINIGUN', 'SHOTGUN', 'EMPTY HANDS'];
+const WEAPON_COLORS = ['#ffd16a', '#ffb347', '#ff8f53', '#fff0b0', '#73e6a1'];
 const PLAYER_COLORS = ['#55d6ff', '#ff6b6b', '#ffd166', '#c792ea', '#6ee7a8', '#ff9f43'];
 
 const BUILDINGS = [
-  {x:32,y:38,w:220,h:224,color:'#c78b4a',style:0}, {x:478,y:45,w:160,h:214,color:'#d47b37',style:1},
-  {x:858,y:38,w:170,h:224,color:'#8b9fa0',style:2}, {x:1240,y:42,w:170,h:218,color:'#dc7935',style:3},
-  {x:1610,y:48,w:120,h:208,color:'#c78b4a',style:0},
-  {x:36,y:464,w:220,h:160,color:'#d47b37',style:1}, {x:478,y:464,w:160,h:160,color:'#c78b4a',style:0},
-  {x:858,y:462,w:170,h:160,color:'#d47b37',style:3}, {x:1242,y:465,w:170,h:160,color:'#5eaa75',style:2},
-  {x:1612,y:468,w:120,h:160,color:'#8b9fa0',style:1},
-  {x:34,y:850,w:220,h:160,color:'#8b9fa0',style:2}, {x:478,y:850,w:160,h:160,color:'#c78b4a',style:0},
-  {x:858,y:850,w:170,h:160,color:'#5eaa75',style:2}, {x:1241,y:850,w:170,h:160,color:'#d47b37',style:1},
-  {x:1610,y:852,w:120,h:160,color:'#c78b4a',style:3},
-  {x:35,y:1240,w:220,h:180,color:'#d47b37',style:1}, {x:478,y:1240,w:160,h:180,color:'#5eaa75',style:2},
-  {x:858,y:1240,w:170,h:180,color:'#c78b4a',style:0}, {x:1240,y:1240,w:170,h:180,color:'#8b9fa0',style:2},
-  {x:1610,y:1240,w:120,h:180,color:'#d47b37',style:3},
+  {x:32,y:38,w:220,h:224,color:'#c78b4a',style:0},
+  {x:478,y:38,w:160,h:224,color:'#d47b37',style:1},
+  {x:858,y:38,w:170,h:224,color:'#8b9fa0',style:2},
+  {x:1240,y:38,w:170,h:224,color:'#dc7935',style:3},
+  {x:1610,y:38,w:120,h:224,color:'#5eaa75',style:2},
+  {x:1984,y:38,w:220,h:224,color:'#c78b4a',style:1},
+  {x:2368,y:38,w:160,h:224,color:'#8b9fa0',style:0},
+  {x:32,y:464,w:220,h:160,color:'#d47b37',style:1},
+  {x:478,y:464,w:160,h:160,color:'#8b9fa0',style:2},
+  {x:858,y:464,w:170,h:160,color:'#dc7935',style:3},
+  {x:1240,y:464,w:170,h:160,color:'#5eaa75',style:2},
+  {x:1610,y:464,w:120,h:160,color:'#c78b4a',style:1},
+  {x:1984,y:464,w:220,h:160,color:'#8b9fa0',style:0},
+  {x:2368,y:464,w:160,h:160,color:'#c78b4a',style:0},
+  {x:32,y:850,w:220,h:160,color:'#8b9fa0',style:2},
+  {x:478,y:850,w:160,h:160,color:'#dc7935',style:3},
+  {x:858,y:850,w:170,h:160,color:'#5eaa75',style:2},
+  {x:1240,y:850,w:170,h:160,color:'#c78b4a',style:1},
+  {x:1610,y:850,w:120,h:160,color:'#8b9fa0',style:0},
+  {x:1984,y:850,w:220,h:160,color:'#c78b4a',style:0},
+  {x:2368,y:850,w:160,h:160,color:'#d47b37',style:1},
+  {x:32,y:1240,w:220,h:180,color:'#dc7935',style:3},
+  {x:478,y:1240,w:160,h:180,color:'#5eaa75',style:2},
+  {x:858,y:1240,w:170,h:180,color:'#c78b4a',style:1},
+  {x:1240,y:1240,w:170,h:180,color:'#8b9fa0',style:0},
+  {x:1610,y:1240,w:120,h:180,color:'#c78b4a',style:0},
+  {x:1984,y:1240,w:220,h:180,color:'#d47b37',style:1},
+  {x:2368,y:1240,w:160,h:180,color:'#8b9fa0',style:2},
+  {x:32,y:1610,w:220,h:180,color:'#5eaa75',style:2},
+  {x:478,y:1610,w:160,h:180,color:'#c78b4a',style:1},
+  {x:858,y:1610,w:170,h:180,color:'#8b9fa0',style:0},
+  {x:1240,y:1610,w:170,h:180,color:'#c78b4a',style:0},
+  {x:1610,y:1610,w:120,h:180,color:'#d47b37',style:1},
+  {x:1984,y:1610,w:220,h:180,color:'#8b9fa0',style:2},
+  {x:2368,y:1610,w:160,h:180,color:'#dc7935',style:3},
+  {x:32,y:1990,w:220,h:180,color:'#c78b4a',style:1},
+  {x:478,y:1990,w:160,h:180,color:'#8b9fa0',style:0},
+  {x:858,y:1990,w:170,h:180,color:'#c78b4a',style:0},
+  {x:1240,y:1990,w:170,h:180,color:'#d47b37',style:1},
+  {x:1610,y:1990,w:120,h:180,color:'#8b9fa0',style:2},
+  {x:1984,y:1990,w:220,h:180,color:'#dc7935',style:3},
+  {x:2368,y:1990,w:160,h:180,color:'#5eaa75',style:2},
+  {x:32,y:2368,w:220,h:180,color:'#8b9fa0',style:0},
+  {x:478,y:2368,w:160,h:180,color:'#c78b4a',style:0},
+  {x:858,y:2368,w:170,h:180,color:'#d47b37',style:1},
+  {x:1240,y:2368,w:170,h:180,color:'#8b9fa0',style:2},
+  {x:1610,y:2368,w:120,h:180,color:'#dc7935',style:3},
+  {x:1984,y:2368,w:220,h:180,color:'#5eaa75',style:2},
+  {x:2368,y:2368,w:160,h:180,color:'#c78b4a',style:1},
 ];
 const TREE_SIZE = 128;
 const TREE_HALF = TREE_SIZE / 2;
 const TREES = [
-  {x:320,y:292},{x:704,y:292},{x:1092,y:292},{x:1476,y:292},
-  {x:320,y:664},{x:704,y:664},{x:1092,y:664},{x:1476,y:664},
-  {x:320,y:1048},{x:704,y:1048},{x:1092,y:1048},{x:1476,y:1048},
+  {x:320,y:292},
+  {x:704,y:292},
+  {x:1092,y:292},
+  {x:1476,y:292},
+  {x:1856,y:292},
+  {x:2240,y:292},
+  {x:2624,y:292},
+  {x:320,y:664},
+  {x:704,y:664},
+  {x:1092,y:664},
+  {x:1476,y:664},
+  {x:1856,y:664},
+  {x:2240,y:664},
+  {x:2624,y:664},
+  {x:320,y:1048},
+  {x:704,y:1048},
+  {x:1092,y:1048},
+  {x:1476,y:1048},
+  {x:1856,y:1048},
+  {x:2240,y:1048},
+  {x:2624,y:1048},
+  {x:320,y:1430},
+  {x:704,y:1430},
+  {x:1092,y:1430},
+  {x:1476,y:1430},
+  {x:1856,y:1430},
+  {x:2240,y:1430},
+  {x:2624,y:1430},
+  {x:320,y:1800},
+  {x:704,y:1800},
+  {x:1092,y:1800},
+  {x:1476,y:1800},
+  {x:1856,y:1800},
+  {x:2240,y:1800},
+  {x:2624,y:1800},
+  {x:320,y:2180},
+  {x:704,y:2180},
+  {x:1092,y:2180},
+  {x:1476,y:2180},
+  {x:1856,y:2180},
+  {x:2240,y:2180},
+  {x:2624,y:2180},
+  {x:320,y:2560},
+  {x:704,y:2560},
+  {x:1092,y:2560},
+  {x:1476,y:2560},
+  {x:1856,y:2560},
+  {x:2240,y:2560},
+  {x:2624,y:2560},
 ];
-const ROAD_COLS = new Set([5, 6, 11, 12, 17, 18, 23, 24]);
-const ROAD_ROWS = new Set([5, 6, 11, 12, 17, 18]);
+const ROAD_COLS = new Set([5, 6, 11, 12, 17, 18, 23, 24, 29, 30, 35, 36, 41]);
+const ROAD_ROWS = new Set([5, 6, 11, 12, 17, 18, 23, 24, 29, 30, 35, 36, 41]);
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve) => {
@@ -294,7 +377,7 @@ function drawTreesLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:numb
   for (const t of TREES) {
     if (t.x + TREE_HALF < visible.x || t.x - TREE_HALF > visible.x + visible.w || t.y + TREE_HALF < visible.y || t.y - TREE_HALF > visible.y + visible.h) continue;
     if (imageReady(treeSprite)) {
-      // Keep the 128x128 canopy art; only the small 20x20 trunk collider blocks movement.
+      // Keep the 128x128 canopy art; only the small 15x15 circular trunk collider blocks movement.
       ctx.drawImage(treeSprite, t.x - TREE_HALF, t.y - TREE_HALF, TREE_SIZE, TREE_SIZE);
     } else {
       ctx.fillStyle = '#2ba966'; ctx.beginPath(); ctx.arc(t.x, t.y, TREE_HALF - 10, 0, Math.PI * 2); ctx.fill();
@@ -306,12 +389,46 @@ function drawProp(ctx: CanvasRenderingContext2D, p: any): void {
   if (p.kind === 'crate' && imageReady(atlas)) {
     ctx.drawImage(atlas, 20 * TILE, 4 * TILE, TILE, TILE, -25, -25, 50, 50);
   } else if (p.kind === 'car') {
-    ctx.fillStyle = 'rgba(20,25,28,.25)'; roundRect(ctx, -30, -11, 62, 26, 7);
-    ctx.fillStyle = '#e56c22'; roundRect(ctx, -30, -15, 60, 27, 6);
-    ctx.fillStyle = '#4b555b'; roundRect(ctx, -14, -11, 27, 19, 4);
-    ctx.fillStyle = '#b7e3e8'; roundRect(ctx, -10, -9, 20, 14, 3);
-    ctx.fillStyle = '#f8e0a3'; ctx.fillRect(25, -9, 4, 5); ctx.fillRect(25, 3, 4, 5);
-    ctx.fillStyle = '#24292c'; ctx.fillRect(-20, -16, 12, 4); ctx.fillRect(13, -16, 12, 4); ctx.fillRect(-20, 12, 12, 4); ctx.fillRect(13, 12, 12, 4);
+    // Parked traffic only: these props have no driving input. Each variant has a distinct body style.
+    const palettes = [
+      { body: '#e56c22', trim: '#4b555b', glass: '#b7e3e8', light: '#f8e0a3' },
+      { body: '#328f63', trim: '#263c35', glass: '#b9e7e5', light: '#f8e0a3' },
+      { body: '#347db4', trim: '#2a3843', glass: '#c6e8ef', light: '#f5e8bb' },
+      { body: '#c94e48', trim: '#4d3131', glass: '#c2e7e9', light: '#f8e0a3' },
+      { body: '#d6b546', trim: '#4b4a3d', glass: '#d2e6e9', light: '#fff1ba' },
+      { body: '#d9e0de', trim: '#485157', glass: '#a8d6e0', light: '#f9f1d7' },
+    ];
+    const v = palettes[(Number(p.variant) || 0) % palettes.length];
+    // A 92x44 world-pixel vehicle body, matched by its physical fixture.
+    ctx.fillStyle = 'rgba(20,25,28,.25)'; roundRect(ctx, -46, -20, 94, 42, 8);
+    ctx.fillStyle = v.body;
+    if ((Number(p.variant) || 0) % 3 === 1) {
+      // Van: high roof and squared rear.
+      roundRect(ctx, -44, -22, 88, 44, 7);
+      ctx.fillStyle = v.trim; roundRect(ctx, -15, -15, 30, 30, 4);
+      ctx.fillStyle = v.glass; roundRect(ctx, -11, -12, 22, 24, 3);
+    } else if ((Number(p.variant) || 0) % 3 === 2) {
+      // Pickup: cab plus distinct open bed.
+      roundRect(ctx, -46, -20, 92, 40, 6);
+      ctx.fillStyle = v.trim; roundRect(ctx, -40, -15, 21, 30, 3);
+      ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 2; ctx.strokeRect(-38, -12, 17, 24);
+      ctx.fillStyle = v.glass; roundRect(ctx, 1, -13, 25, 26, 3);
+    } else {
+      // Compact sedan / coupe.
+      roundRect(ctx, -46, -20, 92, 40, 10);
+      ctx.fillStyle = v.trim; roundRect(ctx, -17, -15, 37, 30, 5);
+      ctx.fillStyle = v.glass; roundRect(ctx, -12, -12, 27, 24, 4);
+    }
+    ctx.fillStyle = '#202629';
+    ctx.fillRect(-30, -22, 15, 5); ctx.fillRect(20, -22, 15, 5);
+    ctx.fillRect(-30, 17, 15, 5); ctx.fillRect(20, 17, 15, 5);
+    ctx.fillStyle = v.light; ctx.fillRect(39, -13, 5, 7); ctx.fillRect(39, 6, 5, 7);
+    ctx.fillStyle = '#bc352e'; ctx.fillRect(-45, -13, 3, 7); ctx.fillRect(-45, 6, 3, 7);
+    if ((Number(p.variant) || 0) % 6 === 4) {
+      // Small taxi roof badge for the yellow vehicle variant.
+      ctx.fillStyle = '#fff4cf'; roundRect(ctx, -5, -3, 10, 6, 2);
+      ctx.fillStyle = '#65552d'; ctx.font = 'bold 4px system-ui'; ctx.textAlign = 'center'; ctx.fillText('TAXI', 0, 1.5);
+    }
   } else if (p.kind === 'bin') {
     ctx.fillStyle = '#27795d'; roundRect(ctx, -11, -12.5, 22, 27, 4);
     ctx.fillStyle = '#38b87d'; roundRect(ctx, -9, -11.5, 18, 22, 3);
@@ -460,8 +577,10 @@ function drawGame(state: any, self: any, playerId: string): void {
       ctx.fillStyle = PLAYER_COLORS[p.color % PLAYER_COLORS.length]; ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
     }
     // Both the gun and the muzzle flash share the same local hand/muzzle anchors as the sprite.
-    drawWeaponLocal(ctx, p.weapon || 0, 1);
-    drawMuzzleSpark(ctx, p);
+    if (Number(p.weapon) >= 0 && Number(p.weapon) < 4) {
+      drawWeaponLocal(ctx, p.weapon, 1);
+      drawMuzzleSpark(ctx, p);
+    }
     ctx.restore();
     ctx.fillStyle = '#16252c'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
     ctx.fillText(String(p.name || 'Player').slice(0, 18), p.x, p.y - 27);
@@ -484,14 +603,14 @@ function drawGame(state: any, self: any, playerId: string): void {
 }
 function weaponSlotAt(screenX: number, screenY: number): number {
   const w = view.width, h = view.height;
-  const gap = 7;
-  const slotW = Math.min(70, (w - 36 - gap * 3) / 4);
+  const gap = 6;
+  const slotW = Math.min(70, (w - 36 - gap * 4) / 5);
   const slotH = 58;
-  const invW = slotW * 4 + gap * 3;
+  const invW = slotW * 5 + gap * 4;
   const invX = (w - invW) / 2;
   const invY = h - 126 - (keys.touch ? 150 : 0);
   if (screenY < invY || screenY > invY + slotH) return -1;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     const x = invX + i * (slotW + gap);
     if (screenX >= x && screenX <= x + slotW) return i;
   }
@@ -593,24 +712,34 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#ffffff'; ctx.font = w < 440 ? 'bold 12px system-ui' : 'bold 15px system-ui'; ctx.fillText(`Score  ${mine.score}`, 27, 60);
   ctx.fillStyle = '#c5d3d7'; ctx.font = '11px system-ui'; ctx.fillText(`${Object.keys(state.players || {}).length} PLAYER(S)`, 27, 77);
 
-  // Inventory: four selectable weapon slots, directly above the health bar.
-  const gap = 7;
-  const slotW = Math.min(70, (w - 36 - gap * 3) / 4);
+  // Five-slot inventory. Slot 5 is intentionally empty-handed and never renders a weapon.
+  const gap = 6;
+  const slotW = Math.min(70, (w - 36 - gap * 4) / 5);
   const slotH = 58;
-  const invW = slotW * 4 + gap * 3;
+  const invW = slotW * 5 + gap * 4;
   const invX = (w - invW) / 2;
   const touchShift = keys.touch ? 150 : 0;
   const invY = h - 126 - touchShift;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     const x = invX + i * (slotW + gap);
-    ctx.fillStyle = i === mine.weapon ? 'rgba(28,97,65,.96)' : 'rgba(15,26,32,.9)';
+    const selected = i === mine.weapon;
+    ctx.fillStyle = selected ? 'rgba(28,97,65,.96)' : 'rgba(15,26,32,.9)';
     roundRect(ctx, x, invY, slotW, slotH, 10);
-    ctx.strokeStyle = i === mine.weapon ? '#57ed91' : 'rgba(211,230,225,.28)';
-    ctx.lineWidth = i === mine.weapon ? 3 : 1; strokeRoundRect(ctx, x + 1, invY + 1, slotW - 2, slotH - 2, 10);
+    ctx.strokeStyle = selected ? '#57ed91' : 'rgba(211,230,225,.28)';
+    ctx.lineWidth = selected ? 3 : 1; strokeRoundRect(ctx, x + 1, invY + 1, slotW - 2, slotH - 2, 10);
     ctx.fillStyle = '#b8c8cd'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left'; ctx.fillText(String(i + 1), x + 7, invY + 13);
-    drawWeaponIcon(ctx, x + slotW / 2, invY + 27, i, 0.9);
-    ctx.fillStyle = i === mine.weapon ? '#ffffff' : '#c5d2d6'; ctx.textAlign = 'center'; ctx.font = 'bold 9px system-ui';
-    const label = ['AK-47','M249','M134','SHOTGUN'][i]; ctx.fillText(label, x + slotW / 2, invY + slotH - 7);
+    if (i < 4) {
+      drawWeaponIcon(ctx, x + slotW / 2, invY + 27, i, 0.82);
+    } else {
+      // A clear empty-hand indicator; deliberately no weapon icon.
+      ctx.strokeStyle = selected ? '#c9ffe0' : '#8ea5a1'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x + slotW / 2, invY + 26, 9, 0.2, Math.PI * 1.75); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x + slotW / 2 - 5, invY + 23); ctx.lineTo(x + slotW / 2 - 5, invY + 16);
+      ctx.moveTo(x + slotW / 2, invY + 22); ctx.lineTo(x + slotW / 2, invY + 14);
+      ctx.moveTo(x + slotW / 2 + 5, invY + 23); ctx.lineTo(x + slotW / 2 + 5, invY + 17); ctx.stroke();
+    }
+    ctx.fillStyle = selected ? '#ffffff' : '#c5d2d6'; ctx.textAlign = 'center'; ctx.font = 'bold 9px system-ui';
+    ctx.fillText(i < 4 ? WEAPON_NAMES[i] : 'EMPTY', x + slotW / 2, invY + slotH - 7, slotW - 5);
   }
   // Green rounded 100/100 health UI, centred at the bottom.
   const hpW = Math.min(280, w - 38), hpH = 40;
@@ -624,7 +753,7 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
 
   if (!keys.touch) {
     ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 160, 24, 8);
-    ctx.fillStyle = '#f1f5f6'; ctx.font = '11px system-ui'; ctx.textAlign = 'left'; ctx.fillText('M  MENU  •  1–4  WEAPONS', 24, h - 22);
+    ctx.fillStyle = '#f1f5f6'; ctx.font = '11px system-ui'; ctx.textAlign = 'left'; ctx.fillText('M MENU  •  1–5 INVENTORY', 24, h - 22);
   }
   const top = Object.entries(state.players || {}).sort((a: any, b: any) => b[1].score - a[1].score).slice(0, 4);
   const boardH = 28 + top.length * 17;
@@ -640,6 +769,36 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('PING / MS', metricsX + 9, 58);
   ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'right'; ctx.fillText(displayedPingMs == null ? '--' : String(displayedPingMs), metricsX + metricsW - 9, 58);
   drawMiniMap(ctx, mine);
+}
+
+// Menu-only snapshot: the scene is rendered once at half resolution and blurred behind the UI.
+// All decorative props are local assets/state; the menu never requests an external host.
+const MENU_SCENE_PROPS = [
+  {x:550,y:390,kind:'car',variant:0,angle:0},{x:935,y:390,kind:'car',variant:1,angle:0},
+  {x:1700,y:390,kind:'car',variant:2,angle:0},{x:2070,y:774,kind:'car',variant:3,angle:0},
+  {x:2460,y:1158,kind:'car',variant:4,angle:0},{x:1700,y:1542,kind:'car',variant:5,angle:0},
+  {x:2070,y:1926,kind:'car',variant:0,angle:0},{x:2460,y:2310,kind:'car',variant:2,angle:0},
+  {x:402,y:320,kind:'bin',angle:0},{x:620,y:360,kind:'hydrant',angle:0},
+  {x:1000,y:350,kind:'bench',angle:0},{x:1366,y:354,kind:'crate',angle:0},
+  {x:610,y:740,kind:'bin',angle:0},{x:970,y:735,kind:'cone',angle:0},
+  {x:1000,y:1900,kind:'crate',angle:0},{x:1320,y:2280,kind:'bin',angle:0},
+] as any[];
+let menuBackdropCache: HTMLCanvasElement | null = null;
+function getMenuBackdropCache(): HTMLCanvasElement | null {
+  if (menuBackdropCache) return menuBackdropCache;
+  const cache = document.createElement('canvas');
+  // Half-resolution cache keeps the full 2688x2688 map memory-friendly on phones.
+  cache.width = Math.ceil(WORLD_W / 2); cache.height = Math.ceil(WORLD_H / 2);
+  const bg = cache.getContext('2d');
+  if (!bg) return null;
+  bg.imageSmoothingEnabled = false;
+  bg.scale(0.5, 0.5);
+  bg.drawImage(floorMapCache, 0, 0);
+  drawWallsLayer(bg, {x:0,y:0,w:WORLD_W,h:WORLD_H});
+  for (const p of MENU_SCENE_PROPS) drawProp(bg, p);
+  drawTreesLayer(bg, {x:0,y:0,w:WORLD_W,h:WORLD_H});
+  menuBackdropCache = cache;
+  return cache;
 }
 
 // Main menu and region/server picker; all room data comes from modd.io's pageRooms().
@@ -685,128 +844,172 @@ function menuButton(ctx: CanvasRenderingContext2D, x:number,y:number,w:number,h:
   ctx.strokeStyle = active ? '#4ee486' : 'rgba(215,231,232,.22)'; ctx.lineWidth = active ? 2 : 1;
   strokeRoundRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, 9);
   ctx.fillStyle = disabled ? '#84949a' : '#f2f7f6'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
-  ctx.fillText(label, x + w / 2, y + h / 2 + 4);
+  ctx.fillText(label, x + w / 2, y + h / 2 + 4, Math.max(32, w - 14));
   if (!disabled) addHit(x, y, w, h, action);
 }
 function drawMenu(): void {
-  const ctx = view.begin('#0d171d');
+  const ctx = view.begin('#0a151a');
   const w = view.width, h = view.height;
   menuHits = [];
-  // Use the contiguous floor cache for a subtle menu backdrop; this also avoids tiled image seams.
-  if (floorMapCache.width > 0) {
-    ctx.save(); ctx.globalAlpha = 0.15; ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(floorMapCache, 0, 0, WORLD_W, WORLD_H, 0, 0, w, h);
+  const backdrop = getMenuBackdropCache();
+  if (backdrop) {
+    const scale = Math.max(w / WORLD_W, h / WORLD_H) * 1.17;
+    const drawW = WORLD_W * scale, drawH = WORLD_H * scale;
+    ctx.save();
+    ctx.filter = `blur(${Math.max(6, Math.min(13, w * 0.012))}px)`;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(backdrop, (w - drawW) / 2, (h - drawH) / 2, drawW, drawH);
     ctx.restore();
   }
-  ctx.fillStyle = 'rgba(7,14,20,.78)'; ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = '#53e28b'; ctx.font = `900 ${Math.min(39, Math.max(24, w * 0.065))}px system-ui`; ctx.textAlign = 'center';
-  ctx.fillText('CHAOS CITY.IO', w / 2, 51);
-  ctx.fillStyle = '#d0e1e4'; ctx.font = 'bold 11px system-ui';
-  ctx.fillText('MAKE A MESS. RULE THE STREETS.', w / 2, 73);
+  // Dark vignette keeps the game map visible but makes labels and buttons readable.
+  ctx.fillStyle = 'rgba(5,13,17,.70)'; ctx.fillRect(0, 0, w, h);
+  const vignette = ctx.createRadialGradient(w * .5, h * .42, 15, w * .5, h * .48, Math.max(w, h) * .8);
+  vignette.addColorStop(0, 'rgba(12,29,32,.10)');
+  vignette.addColorStop(1, 'rgba(3,8,11,.55)');
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, w, h);
 
-  const wide = w >= 760;
-  const panelW = Math.min(1020, w - 24);
+  const smallHeight = h < 440;
+  const titleY = smallHeight ? (menuError ? 20 : 29) : h < 600 ? 36 : 43;
+  ctx.textAlign = 'center'; ctx.fillStyle = '#53e28b';
+  ctx.font = `900 ${Math.min(38, Math.max(23, w * 0.057))}px system-ui`;
+  ctx.shadowColor = 'rgba(52,226,139,.32)'; ctx.shadowBlur = 16;
+  ctx.fillText('CHAOS CITY.IO', w / 2, titleY);
+  ctx.shadowBlur = 0;
+  if (!smallHeight) {
+    ctx.fillStyle = '#d7e7e5'; ctx.font = 'bold 10px system-ui';
+    ctx.fillText('MAKE A MESS. RULE THE STREETS.', w / 2, titleY + 22);
+  }
+
+  const panelY = smallHeight ? (menuError ? 61 : 43) : h < 600 ? (menuError ? 82 : 64) : (menuError ? 100 : 82);
+  const panelH = Math.max(120, h - panelY - 9);
+  const panelW = Math.min(1080, w - 20);
   const panelX = (w - panelW) / 2;
-  const panelY = 94;
-  const panelH = Math.max(350, h - 108);
-  ctx.fillStyle = 'rgba(17,30,37,.96)'; roundRect(ctx, panelX, panelY, panelW, panelH, 17);
-  ctx.strokeStyle = 'rgba(160,197,202,.25)'; ctx.lineWidth = 1; strokeRoundRect(ctx, panelX + 0.5, panelY + 0.5, panelW - 1, panelH - 1, 17);
+  ctx.fillStyle = 'rgba(10,23,29,.94)'; roundRect(ctx, panelX, panelY, panelW, panelH, 16);
+  ctx.strokeStyle = 'rgba(149,201,190,.30)'; ctx.lineWidth = 1;
+  strokeRoundRect(ctx, panelX + .5, panelY + .5, panelW - 1, panelH - 1, 16);
 
+  const wide = w >= 780 && h >= 540;
   if (wide) {
-    const leftX = panelX + 22, leftW = panelW * 0.53 - 24;
-    const rightX = panelX + panelW * 0.57, rightW = panelX + panelW - rightX - 22;
-    ctx.fillStyle = '#a8bdc2'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'left'; ctx.fillText('CHOOSE A REGION', leftX, panelY + 31);
+    const inner = 20;
+    const leftX = panelX + inner;
+    const leftW = Math.floor(panelW * .555) - inner;
+    const rightX = panelX + Math.floor(panelW * .585);
+    const rightW = panelX + panelW - inner - rightX;
+    ctx.textAlign = 'left'; ctx.fillStyle = '#eaf5f1'; ctx.font = 'bold 13px system-ui';
+    ctx.fillText('CHOOSE YOUR REGION', leftX, panelY + 27);
     const regions = menuRooms?.regions || [];
-    const rgap = 6, rw = (leftW - rgap * 3) / 4;
-    regions.forEach((r: any, i: number) => menuButton(ctx, leftX + i * (rw + rgap), panelY + 42, rw, 38, r.name, `region:${r.id}`, selectedRegion === r.id));
-    ctx.fillStyle = '#a8bdc2'; ctx.font = 'bold 12px system-ui'; ctx.fillText(`SERVERS  ·  ${regionName(selectedRegion)}`, leftX, panelY + 104);
-    menuButton(ctx, leftX + leftW - 78, panelY + 84, 78, 26, 'REFRESH', 'refresh');
+    const regionGap = 6, regionCount = Math.max(1, regions.length);
+    const regionW = (leftW - regionGap * Math.max(0, regionCount - 1)) / regionCount;
+    regions.forEach((r: any, i: number) => menuButton(ctx, leftX + i * (regionW + regionGap), panelY + 38, regionW, 31, r.name, `region:${r.id}`, selectedRegion === r.id));
+    if (!regions.length) {
+      ctx.fillStyle = '#9bb0b4'; ctx.font = '12px system-ui'; ctx.fillText('Using the default server region.', leftX, panelY + 57);
+    }
+    ctx.fillStyle = '#b5c9cd'; ctx.font = 'bold 11px system-ui';
+    ctx.fillText(`AVAILABLE SERVERS  ·  ${regionName(selectedRegion)}`, leftX, panelY + 89);
+    menuButton(ctx, leftX + leftW - 77, panelY + 73, 77, 24, 'REFRESH', 'refresh');
     const allRooms = menuRooms?.rooms || [];
     const regionalRooms = allRooms.filter((r: any) => r.region === selectedRegion);
     const rooms = regionalRooms.length ? regionalRooms : allRooms.filter((r: any) => r.region == null);
-    const listY = panelY + 119;
-    const listBottom = panelY + panelH - 28;
-    const rowH = 42;
+    const listY = panelY + 101;
+    const listBottom = panelY + panelH - 14;
+    const rowH = 36;
     const maxRows = Math.max(1, Math.floor((listBottom - listY) / rowH));
     if (!rooms.length) {
-      ctx.fillStyle = '#e1eaeb'; ctx.font = '13px system-ui'; ctx.fillText('No active servers here yet.', leftX + 3, listY + 22);
-      ctx.fillStyle = '#9eb0b5'; ctx.font = '12px system-ui'; ctx.fillText('Play will start a server in this region.', leftX + 3, listY + 44);
+      ctx.fillStyle = '#e1eaeb'; ctx.font = '13px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('No active servers in this region yet.', leftX + 4, listY + 20, leftW - 8);
+      ctx.fillStyle = '#9eb0b5'; ctx.font = '12px system-ui';
+      ctx.fillText('Press PLAY to join or create a server.', leftX + 4, listY + 41, leftW - 8);
     }
     rooms.slice(0, maxRows).forEach((r: any, i: number) => {
       const label = serverLabel(r, i);
       const players = `${r.players}/${r.maxPlayers}`;
       const chosen = selectedRoom === r.name;
-      const rowY = listY + i * rowH;
-      menuButton(ctx, leftX, rowY, leftW, rowH - 5, `${label}     ${players}${r.full ? '   FULL' : ''}`, `room:${r.name}`, chosen, !!r.full);
+      menuButton(ctx, leftX, listY + i * rowH, leftW, rowH - 4,
+        `${label}     ${players}${r.full ? '   FULL' : ''}`, `room:${r.name}`, chosen, !!r.full);
     });
 
-    ctx.fillStyle = 'rgba(28,45,51,.78)'; roundRect(ctx, rightX, panelY + 26, rightW, panelH - 46, 13);
-    ctx.fillStyle = '#f3f8f6'; ctx.font = 'bold 16px system-ui'; ctx.textAlign = 'left'; ctx.fillText('YOUR LOADOUT', rightX + 18, panelY + 53);
-    ctx.fillStyle = '#a9bdc2'; ctx.font = '12px system-ui'; ctx.fillText('Four weapons · switch with keys 1–4', rightX + 18, panelY + 74);
+    const cardY = panelY + 14, cardH = panelH - 28;
+    ctx.fillStyle = 'rgba(31,49,54,.78)'; roundRect(ctx, rightX, cardY, rightW, cardH, 13);
+    ctx.fillStyle = '#f3f8f6'; ctx.font = 'bold 15px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText('LOADOUT', rightX + 16, panelY + 38);
+    ctx.fillStyle = '#a9bdc2'; ctx.font = '11px system-ui';
+    ctx.fillText('4 weapons + empty hands · keys 1–5', rightX + 16, panelY + 57, rightW - 32);
     WEAPON_NAMES.forEach((name, i) => {
-      const yy = panelY + 104 + i * 39;
-      ctx.fillStyle = '#0d171d'; roundRect(ctx, rightX + 18, yy, rightW - 36, 32, 8);
-      drawWeaponIcon(ctx, rightX + 46, yy + 16, i, 0.75);
-      ctx.fillStyle = WEAPON_COLORS[i]; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'left'; ctx.fillText(`${i + 1}. ${name}`, rightX + 76, yy + 20);
+      const yy = panelY + 69 + i * 28;
+      ctx.fillStyle = 'rgba(8,19,24,.72)'; roundRect(ctx, rightX + 14, yy, rightW - 28, 24, 6);
+      if (i < 4) drawWeaponIcon(ctx, rightX + 31, yy + 12, i, .55);
+      else { ctx.strokeStyle = '#73e6a1'; ctx.lineWidth = 1.7; ctx.beginPath(); ctx.arc(rightX + 31, yy + 12, 5, .2, Math.PI * 1.75); ctx.stroke(); }
+      ctx.fillStyle = WEAPON_COLORS[i]; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText(`${i + 1}. ${name}`, rightX + 45, yy + 16, rightW - 60);
     });
-    const by = panelY + panelH - (keys.touch ? 170 : 66);
-    const controlsY = by - 184;
-    ctx.fillStyle = '#a9bdc2'; ctx.font = 'bold 11px system-ui'; ctx.fillText('CONTROLS', rightX + 18, controlsY);
-    ctx.fillStyle = '#e1eaeb'; ctx.font = '12px system-ui';
-    ctx.fillText('WASD / arrows  ·  Move', rightX + 18, controlsY + 20);
-    ctx.fillText('Mouse / F  ·  Fire', rightX + 18, controlsY + 39);
-    ctx.fillText('Space  ·  Smash props', rightX + 18, controlsY + 58);
-    ctx.fillText('M  ·  Open this menu', rightX + 18, controlsY + 77);
-    menuButton(ctx, rightX + 18, by, rightW - 36, 46, 'PLAY', 'play', true, joinInProgress);
-    menuButton(ctx, rightX + 18, by - 54, rightW - 36, 40, 'NEW SERVER IN THIS REGION', 'new', false, joinInProgress || !selectedRegion || ((menuRooms?.regions || []).length > 0 && (menuRooms?.rooms || []).some((r: any) => r.region == null)));
+    const actionBottom = panelY + panelH - 12;
+    const playY = actionBottom - 43;
+    const newY = playY - 39;
+    const controlY = newY - 45;
+    ctx.fillStyle = '#d5e1e4'; ctx.font = '10px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText('WASD / arrows · Move', rightX + 16, controlY, rightW - 30);
+    ctx.fillText('Mouse / F · Fire    Space · Smash', rightX + 16, controlY + 14, rightW - 30);
+    ctx.fillText('M · Menu', rightX + 16, controlY + 28, rightW - 30);
+    menuButton(ctx, rightX + 14, newY, rightW - 28, 33, 'NEW SERVER IN THIS REGION', 'new', false,
+      joinInProgress || !selectedRegion || ((menuRooms?.regions || []).length > 0 && (menuRooms?.rooms || []).some((r: any) => r.region == null)));
+    menuButton(ctx, rightX + 14, playY, rightW - 28, 39, '▶  PLAY', 'play', true, joinInProgress);
   } else {
-    const margin = 16;
-    const contentX = panelX + margin;
-    const contentW = panelW - margin * 2;
-    ctx.fillStyle = '#a8bdc2'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'left'; ctx.fillText('REGION', contentX, panelY + 27);
+    const contentX = panelX + 12;
+    const contentW = panelW - 24;
+    ctx.textAlign = 'left'; ctx.fillStyle = '#eaf5f1'; ctx.font = 'bold 11px system-ui';
+    ctx.fillText('REGION', contentX, panelY + 18);
     const regions = menuRooms?.regions || [];
-    const rgap = 6, rw = (contentW - rgap) / 2;
+    const cols = contentW >= 500 ? Math.max(1, Math.min(4, regions.length || 1)) : 2;
+    const rgap = 5, rw = (contentW - rgap * Math.max(0, cols - 1)) / cols;
+    const regionTop = panelY + 25;
     regions.forEach((r: any, i: number) => {
-      const col = i % 2, row = Math.floor(i / 2);
-      menuButton(ctx, contentX + col * (rw + rgap), panelY + 36 + row * 34, rw, 29, r.name, `region:${r.id}`, selectedRegion === r.id);
+      const col = i % cols, row = Math.floor(i / cols);
+      menuButton(ctx, contentX + col * (rw + rgap), regionTop + row * 29, rw, 25, r.name, `region:${r.id}`, selectedRegion === r.id);
     });
-    const listY = panelY + 116;
-    ctx.fillStyle = '#a8bdc2'; ctx.font = 'bold 11px system-ui'; ctx.fillText(`SERVERS · ${regionName(selectedRegion)}`, contentX, listY);
-    menuButton(ctx, contentX + contentW - 76, listY - 17, 76, 24, 'REFRESH', 'refresh');
+    const regionRows = Math.ceil(regions.length / cols);
+    const headingY = regionTop + Math.max(1, regionRows) * 29 + 12;
+    ctx.fillStyle = '#b5c9cd'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText(`SERVERS · ${regionName(selectedRegion)}`, contentX, headingY);
+    menuButton(ctx, contentX + contentW - 70, headingY - 16, 70, 22, 'REFRESH', 'refresh');
     const allRooms = menuRooms?.rooms || [];
     const regionalRooms = allRooms.filter((r: any) => r.region === selectedRegion);
     const rooms = regionalRooms.length ? regionalRooms : allRooms.filter((r: any) => r.region == null);
-    const rowY = listY + 9;
-    const rowH = 32;
-    const touchExtra = keys.touch ? 116 : 0;
-    const listMax = Math.max(1, Math.floor((panelY + panelH - 186 - touchExtra - rowY) / rowH));
+    const listY = headingY + 7;
+    const playY = panelY + panelH - 48;
+    const newY = playY - 38;
+    const hintReserve = h >= 500 ? 24 : 0;
+    const listBottom = newY - 7 - hintReserve;
+    const rowH = h < 400 ? 24 : 29;
+    const maxRows = Math.max(0, Math.floor((listBottom - listY) / rowH));
     if (!rooms.length) {
-      ctx.fillStyle = '#e1eaeb'; ctx.font = '12px system-ui'; ctx.fillText('No active servers yet. Play starts one.', contentX, rowY + 20);
+      ctx.fillStyle = '#e1eaeb'; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('No active servers yet. PLAY will start one.', contentX + 3, listY + 16, contentW - 6);
     }
-    rooms.slice(0, Math.min(5, listMax)).forEach((r: any, i: number) => {
-      menuButton(ctx, contentX, rowY + i * rowH, contentW, rowH - 4,
-        `${serverLabel(r, i)}   ${r.players}/${r.maxPlayers}${r.full ? '  FULL' : ''}`,
+    rooms.slice(0, Math.min(6, maxRows)).forEach((r: any, i: number) => {
+      menuButton(ctx, contentX, listY + i * rowH, contentW, rowH - 3,
+        `${serverLabel(r, i)}    ${r.players}/${r.maxPlayers}${r.full ? '  FULL' : ''}`,
         `room:${r.name}`, selectedRoom === r.name, !!r.full);
     });
-    const helpY = panelY + panelH - 142 - touchExtra;
-    ctx.fillStyle = '#d5e1e4'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText('WASD / arrows: move  ·  Mouse or F: fire  ·  Space: smash', w / 2, helpY);
-    ctx.fillText('Press M in a match to return here. Keys 1–4 change weapons.', w / 2, helpY + 17);
-    const by = panelY + panelH - 98 - touchExtra;
-    menuButton(ctx, contentX, by, contentW * 0.59, 47, 'PLAY', 'play', true, joinInProgress);
-    menuButton(ctx, contentX + contentW * 0.59 + 7, by, contentW * 0.41 - 7, 47, 'NEW SERVER', 'new', false, joinInProgress || !selectedRegion || ((menuRooms?.regions || []).length > 0 && (menuRooms?.rooms || []).some((r: any) => r.region == null)));
+    menuButton(ctx, contentX, newY, contentW, 32, 'NEW SERVER IN THIS REGION', 'new', false,
+      joinInProgress || !selectedRegion || ((menuRooms?.regions || []).length > 0 && (menuRooms?.rooms || []).some((r: any) => r.region == null)));
+    menuButton(ctx, contentX, playY, contentW, 39, '▶  PLAY', 'play', true, joinInProgress);
+    if (h >= 500) {
+      ctx.fillStyle = '#a7bdc1'; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('WASD MOVE · M MENU · 1–5 INVENTORY', w / 2, newY - 10, contentW);
+    }
   }
-
+  // Error messages live in the reserved header gap above the panel, never on top of a button or label.
   if (menuError) {
-    ctx.fillStyle = '#ffb4a7'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText(menuError.slice(0, 110), w / 2, h - 8);
+    ctx.fillStyle = 'rgba(87,24,25,.95)'; roundRect(ctx, panelX + 12, panelY - 22, panelW - 24, 18, 7);
+    ctx.fillStyle = '#ffc3bb'; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(menuError.slice(0, 100), w / 2, panelY - 9, panelW - 40);
   }
   if (mode === 'joining') {
-    ctx.fillStyle = 'rgba(6,12,16,.74)'; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 18px system-ui'; ctx.textAlign = 'center'; ctx.fillText('CONNECTING TO CITY…', w / 2, h / 2);
+    ctx.fillStyle = 'rgba(6,12,16,.68)'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#ffffff'; ctx.font = `bold ${Math.min(18, Math.max(13, w * .045))}px system-ui`; ctx.textAlign = 'center';
+    ctx.fillText('CONNECTING TO CITY…', w / 2, h / 2, w - 30);
   }
 }
-
 function cursorWorldPosition(): { x: number; y: number } {
   // drawGame applies screen = (world - camera) * zoom. Invert that exact transform here.
   // This avoids aim drifting when the canvas is resized or the camera is clamped at a map edge.
@@ -821,6 +1024,7 @@ async function startWorker(): Promise<void> {
       if (keys.pressed('2')) selectedWeapon = 1;
       if (keys.pressed('3')) selectedWeapon = 2;
       if (keys.pressed('4')) selectedWeapon = 3;
+      if (keys.pressed('5')) selectedWeapon = 4;
       const pointer = cursorWorldPosition();
       const angle = aimCameraReady ? Math.atan2(pointer.y - localPos.y, pointer.x - localPos.x) : 0;
       const positiveAngle = angle < 0 ? angle + Math.PI * 2 : angle;
