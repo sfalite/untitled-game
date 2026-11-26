@@ -22,32 +22,8 @@ const WEAPON_NAMES = ['GLOCK-17', 'AK-47', 'M249', 'M134 MINIGUN', 'SHOTGUN'];
 const WEAPON_COLORS = ['#ffe07a', '#ffd16a', '#ffb347', '#ff8f53', '#fff0b0'];
 // Exact local muzzle points in the same orientation as drawWeaponLocal/drawWeaponShape.
 // Keep in sync with sim.ts so a rendered barrel and its authoritative shot share an origin.
-const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 22, 25];
+const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 24, 25];
 const WEAPON_MUZZLE_SIDE = 8;
-function muzzleWorldPosition(player: any, weaponId: number, aimAngle = Number(player?.aimAngle) || 0): { x: number; y: number } {
-  const forward = WEAPON_MUZZLE_FORWARD[weaponId] ?? WEAPON_MUZZLE_FORWARD[0];
-  return {
-    x: Number(player.x) + Math.cos(aimAngle) * forward - Math.sin(aimAngle) * WEAPON_MUZZLE_SIDE,
-    y: Number(player.y) + Math.sin(aimAngle) * forward + Math.cos(aimAngle) * WEAPON_MUZZLE_SIDE,
-  };
-}
-function visualBulletPosition(bullet: any, players: Record<string, any>): { x: number; y: number } {
-  let x = Number(bullet.x) || 0;
-  let y = Number(bullet.y) || 0;
-  const shooter = players?.[bullet.owner];
-  const age = Number.isFinite(Number(bullet.age)) ? Number(bullet.age) : 99;
-  // A room-confirmed bullet can arrive before the shooter has reached the same interpolation
-  // pose on this client. Blend its first two ticks from the visible muzzle for EVERY shooter,
-  // then fade the correction out. This affects visuals only; server collision/damage stays exact.
-  if (shooter && age < 3 && Number.isFinite(Number(bullet.spawnX)) && Number.isFinite(Number(bullet.spawnY))
-      && Number.isFinite(Number(shooter.x)) && Number.isFinite(Number(shooter.y))) {
-    const muzzle = muzzleWorldPosition(shooter, Number(bullet.weaponId), Number(shooter.aimAngle) || 0);
-    const weight = age <= 1 ? 1 : Math.max(0, (3 - age) / 2);
-    x += (muzzle.x - Number(bullet.spawnX)) * weight;
-    y += (muzzle.y - Number(bullet.spawnY)) * weight;
-  }
-  return { x, y };
-}
 const PLAYER_COLORS = ['#55d6ff', '#ff6b6b', '#ffd166', '#c792ea', '#6ee7a8', '#ff9f43'];
 
 const BUILDINGS = [
@@ -485,6 +461,16 @@ function drawProp(ctx: CanvasRenderingContext2D, p: any): void {
     ctx.fillStyle = '#80502d'; ctx.fillRect(-12, 2, 4, 11); ctx.fillRect(8, 2, 4, 11);
   }
   ctx.restore();
+  // Show damage only after the object has been hit. Cars have 200 HP; every other prop has 20.
+  const maxHp = p.kind === 'car' ? 200 : 20;
+  const hp = Number.isFinite(Number(p.health)) ? Math.max(0, Math.min(maxHp, Number(p.health))) : maxHp;
+  if (p.active && hp < maxHp) {
+    const barW = p.kind === 'car' ? 54 : 28;
+    const barY = p.y - (p.kind === 'car' ? 31 : 22);
+    ctx.fillStyle = 'rgba(13,20,24,.82)'; roundRect(ctx, p.x - barW / 2, barY, barW, 5, 2);
+    ctx.fillStyle = hp / maxHp > 0.5 ? '#35d879' : hp / maxHp > 0.25 ? '#f3c84b' : '#ef5b55';
+    roundRect(ctx, p.x - barW / 2 + 1, barY + 1, Math.max(0, (barW - 2) * hp / maxHp), 3, 1.5);
+  }
 }
 function drawWeaponShape(ctx: CanvasRenderingContext2D, weapon: number): void {
   // Every weapon is authored muzzle-up in local coordinates. The player renderer rotates
@@ -585,7 +571,9 @@ function drawGame(state: any, self: any, playerId: string): void {
   const mine = s.players[playerId];
   updateWeaponAudio(mine);
   updateDeathAudio(s.players, mine, playerId);
-  // All players, including the local predicted player, use the same visual muzzle correction below.
+  // With predict:'self', the local player's movement is predicted while remote players are
+  // smoothly interpolated from authoritative room frames. Bullet positions remain authoritative
+  // simulation coordinates; never reattach a bullet to the shooter's later muzzle position.
   const fit = Math.min(view.width / 960, view.height / 640);
   const zoom = Math.max(0.68, Math.min(1.35, fit * 1.2));
   const visibleW = view.width / zoom;
@@ -608,10 +596,11 @@ function drawGame(state: any, self: any, playerId: string): void {
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
   for (const b of s.bullets || []) {
-    const bulletPos = visualBulletPosition(b, s.players || {});
+    // The sim owns x/y and velocity for every bullet. Never offset it to the shooter's
+    // current muzzle: the shooter may have moved or rotated since this shot was created.
     ctx.fillStyle = b.color || '#ffd16a';
-    ctx.beginPath(); ctx.arc(bulletPos.x, bulletPos.y, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(255,240,170,.32)'; ctx.beginPath(); ctx.arc(bulletPos.x, bulletPos.y, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,240,170,.32)'; ctx.beginPath(); ctx.arc(b.x, b.y, 8, 0, Math.PI * 2); ctx.fill();
   }
   for (const p of s.particles || []) {
     const alpha = Math.max(0.08, Math.min(1, p.life / 25));
