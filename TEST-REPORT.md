@@ -58,3 +58,26 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 8 --shots 3`,
 
 - Official `npx moddio test` or `npx moddio play` against the actual SDK runtime.
 - A live-browser test with two networked clients. The smoke harness uses a local fake Planck-compatible world, not modd.io's production physics and lockstep implementation.
+
+
+## Update v10 audio check
+- Added the supplied `fire_pistol.mp3` (MP3, 44.1 kHz stereo; approximately 1.61 seconds) to `assets/audio/`.
+- Updated the client sound router so weapon ID 0 (Glock-17) uses its own six-voice audio pool. AK-47/M249, M134 and Shotgun remain routed to their existing samples.
+- Source-level checks verify the dedicated asset path, the Glock weapon branch, and inclusion of the pistol pool in audio cleanup. This report does not claim a browser/runtime audio test.
+
+
+## Update v11 local checks
+
+- Pickup and drop input now use held-key state on the client and rising-edge detection in the sim, so one key press produces one authoritative action even if the browser samples inputs across multiple animation frames.
+- Pickup radius and the client prompt now match at 64 world pixels.
+- Empty inventory slots draw no extra fist art, and the player renderer no longer layers a custom hand over the supplied sprite. Empty-slot attacks are still handled by the sim and use 50px reach with the existing directional check and 12 damage.
+- Glock local placement moved 5px forward (y offset 4 to -1 in its local muzzle-up coordinate system); its visible flash and simulation muzzle offset use 18px.
+- This update has not been tested in the official modd.io runtime or a live networked browser session.
+
+## Update v11 — reliable pickup, Glock grip and empty-slot melee
+
+- TypeScript no-emit compilation passed for `sim.ts`, `server.ts` and `client/main.ts` with temporary ambient declarations for SDK modules.
+- Simulation smoke test exercised the actual compiled `sim.ts` config against a lightweight mock physics world: nearby weapon picked up into the selected empty slot; holding E did not collect more than once; a fresh E press selected another available slot; G dropped the selected weapon; holding G did not drop repeatedly; and punching from an empty slot reduced a target's health from 100 to 88 without creating a bullet.
+- Source checks confirmed pickup radius and HUD prompt both use 64 pixels, input sends held E/G state, simulation uses rising-edge detection, the Glock visual offset is moved forward, and the muzzle flash/muzzle position both use 18 pixels.
+- Removed custom fist art from player rendering and empty inventory/menu slots. Empty slots are labeled `EMPTY`; server-side punch damage remains active.
+- These are local compile/smoke checks with a fake physics world. Official `npx moddio test`, actual Planck adapter execution, and live browser multiplayer testing were not performed.

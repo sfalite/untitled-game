@@ -79,3 +79,22 @@ Run the official checks in the project directory before publishing:
 npx moddio test
 npx moddio dev
 ```
+
+
+## Update v10 — Glock-17 pistol audio
+
+- Added the supplied `fire_pistol.mp3` under `assets/audio/`.
+- Glock-17 shots (weapon ID 0) now use a dedicated six-voice audio pool, so the pistol sound is replayed from its start for each confirmed shot without cutting off overlapping shots.
+- AK-47 and M249 continue to use `fire_rifle.mp3`; M134 Minigun uses `fire_minigun.mp3`; Shotgun retains `fire_shotgun.mp3`.
+
+Test in the modd.io browser after running `npx moddio test` and `npx moddio dev`; browser autoplay restrictions mean sound playback may only unlock after the first user input.
+
+
+## Update v11 — pickup reliability, Glock placement, and empty slots
+
+- Weapon pickup radius increased to 64 world pixels; the interaction prompt uses the same radius.
+- E and G are sent as held input states and consumed as rising-edge actions by the deterministic simulation. Holding a key cannot repeatedly collect or drop items, and short press pulses are less likely to be lost between client sampling and simulation ticks.
+- Glock-17 artwork moved forward relative to the right-hand anchor, and its visual muzzle flash and authoritative projectile muzzle now use an 18px forward offset.
+- Removed the custom fist overlay on the player and fist drawings from empty inventory/loadout slots. The character's supplied sprite keeps its own hands; empty slots are shown as EMPTY.
+- Empty-slot punches retain server-authoritative damage, with range increased from 42 to 50 world pixels; attack direction, cooldown, spawn protection, knockback and death handling remain in the simulation.
+- TypeScript/static asset checks are recommended before publishing; no claim of official modd.io runtime validation is made by this package.

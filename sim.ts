@@ -34,10 +34,10 @@ const WEAPONS: WeaponRule[] = [
   { damage: 8, cooldown: 12, speed: 15, life: 28, spread: 0.25, pellets: 5, color: '#fff0b0' },
 ];
 const WEAPON_DROP_CHANCE = 0.55;
-const PICKUP_RADIUS = 48;
+const PICKUP_RADIUS = 64;
 const MAX_WEAPON_PICKUPS = 80;
 const PUNCH_DAMAGE = 12;
-const PUNCH_RANGE = 42;
+const PUNCH_RANGE = 50;
 const PUNCH_COOLDOWN = 13;
 
 // Planck keeps contact/broad-phase history, so rebuild its canonical world periodically.
@@ -156,6 +156,7 @@ type Player = {
   /** Selected inventory slot (0-4). Actual weapon IDs live in inventory. */
   weapon: number; inventory: Array<number | null>;
   fire: boolean; smash: boolean; pickup: boolean; drop: boolean;
+  pickupWasDown: boolean; dropWasDown: boolean;
   fireCooldown: number; smashCooldown: number; punchCooldown: number; punchFlash: number;
   score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number; shotWeapon: number;
   deathSeq: number; deathX: number; deathY: number;
@@ -434,7 +435,7 @@ function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null):
 }
 function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
   // The Glock has a shorter barrel; long guns share the grip-to-muzzle offset.
-  const barrelLength = weaponId === 0 ? 15 : weaponId === 3 ? 27 : 25;
+  const barrelLength = weaponId === 0 ? 18 : weaponId === 3 ? 27 : 25;
   return {
     x: p.x + Math.cos(p.aimAngle) * barrelLength - Math.sin(p.aimAngle) * 8,
     y: p.y + Math.sin(p.aimAngle) * barrelLength + Math.cos(p.aimAngle) * 8,
@@ -443,7 +444,7 @@ function muzzlePosition(p: Player, weaponId: number): {x:number;y:number} {
 
 export default defineSim({
   name: 'chaos-city',
-  version: '12',
+  version: '13',
   tickRate: 20,
   maxPlayers: 32,
   physics: box2dPhysics,
@@ -479,6 +480,7 @@ export default defineSim({
     state.players[id] = {
       name: (info.name || 'Player').slice(0, 18), x: spawn.x, y: spawn.y, prevX: spawn.x, prevY: spawn.y, body,
       move: [0, 0], aimAngle: 0, weapon: 0, inventory: [0, null, null, null, null], fire: false, smash: false, pickup: false, drop: false,
+      pickupWasDown: false, dropWasDown: false,
       fireCooldown: 0, smashCooldown: 0, punchCooldown: 0, punchFlash: 0, score: 0, health: 100, invulnerable: 45,
       color: ctx.int(6), muzzleFlash: 0, shotSeq: 0, shotWeapon: 0,
       deathSeq: 0, deathX: spawn.x, deathY: spawn.y,
@@ -574,7 +576,13 @@ export default defineSim({
     // A pickup is removed only after an empty slot has been found and filled.
     for (const id of Object.keys(state.players).sort()) {
       const p = state.players[id];
-      if (p.drop) {
+      // Actions use rising edges. The client sends held keys; this avoids missed one-frame
+      // pressed() pulses and prevents a held E/G key from collecting or dropping repeatedly.
+      const pickupPressed = p.pickup && !p.pickupWasDown;
+      const dropPressed = p.drop && !p.dropWasDown;
+      p.pickupWasDown = p.pickup;
+      p.dropWasDown = p.drop;
+      if (dropPressed) {
         const weaponId = p.inventory[p.weapon];
         if (typeof weaponId === 'number') {
           // Drop at the player's current position, with the weapon lying in their facing direction.
@@ -582,7 +590,8 @@ export default defineSim({
           p.inventory[p.weapon] = null;
         }
       }
-      if (p.pickup) {
+      if (pickupPressed) {
+        // Re-evaluate the nearest weapon and an available slot on the authoritative frame.
         const slot = freeInventorySlot(p);
         const pickupIndex = slot >= 0 ? nearestPickupIndex(state, p) : -1;
         if (slot >= 0 && pickupIndex >= 0) {
