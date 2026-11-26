@@ -55,6 +55,12 @@ let localPredictedBullets: LocalPredictedBullet[] = [];
 let nextLocalPredictedBulletId = 1;
 let localShotToken = 0;
 let localNextShotAt = 0;
+let localFireWasDown = false;
+let localFireHeldSince = 0;
+let physicalMouseWasDown = false;
+let suppressCurrentMousePress = false;
+// Auto weapons need a deliberate hold before repeating; a normal click must create one shot.
+const AUTO_FIRE_HOLD_DELAY_MS = 260;
 let latestLocalInventory: Array<number | null> = [0, null, null, null, null];
 let localPredictedMuzzleUntil = 0;
 let localPredictedMuzzleWeapon = -1;
@@ -619,6 +625,10 @@ function resetLocalShotPrediction(): void {
   nextLocalPredictedBulletId = 1;
   localShotToken = 0;
   localNextShotAt = 0;
+  localFireWasDown = false;
+  localFireHeldSince = 0;
+  physicalMouseWasDown = false;
+  suppressCurrentMousePress = false;
   latestLocalInventory = [0, null, null, null, null];
   localPredictedMuzzleUntil = 0;
   localPredictedMuzzleWeapon = -1;
@@ -832,7 +842,9 @@ function drawSynchronizedBullets(
     }
     const ageMs = now - predicted.bornAt;
     if (ageMs >= predicted.maxAgeMs) continue;
-    if (confirmedShotToken >= predicted.shotToken && ageMs > 180) continue;
+    // Once the authority confirms this token, discard any provisional tracer that did not match
+    // an authoritative bullet. A grace window here draws the same shot twice on slower connections.
+    if (confirmedShotToken >= predicted.shotToken) continue;
     if (ageMs > 900 && confirmedShotToken < predicted.shotToken) continue;
 
     const point = predictedBulletAtTime(predicted, now);
@@ -1400,11 +1412,27 @@ async function startWorker(): Promise<void> {
       if (!Number.isFinite(aim)) aim = 0;
       aim = Math.max(0, Math.min(65535, aim));
       const [mx, my] = keys.move();
-      const pressedFire = (keys.mouse.down && weaponSlotAt(keys.mouse.x, keys.mouse.y) < 0) || keys.keys.has('f');
-      // Client prediction is render-only: it makes the muzzle flash, tracer and sound immediate.
-      // The input still goes through the SDK's normal lead/prediction pipeline; we deliberately do
-      // not disable inputLead because the SDK documents that as the no-prediction mode.
-      predictLocalShotFromInput(pressedFire, angle, performance.now(), keys.keys.has('g'));
+      const physicalMouseDown = keys.mouse.down;
+      const mouseWentDown = physicalMouseDown && !physicalMouseWasDown;
+      // Decide whether a mouse press is a UI click once, at press time. Do not let moving a
+      // held mouse across the inventory temporarily toggle fire off/on and create a fake second edge.
+      if (mouseWentDown) suppressCurrentMousePress = weaponSlotAt(keys.mouse.x, keys.mouse.y) >= 0;
+      if (!physicalMouseDown) suppressCurrentMousePress = false;
+      physicalMouseWasDown = physicalMouseDown;
+      const mouseFireDown = physicalMouseDown && !suppressCurrentMousePress;
+      const pressedFire = mouseFireDown || keys.keys.has('f');
+      const now = performance.now();
+      const fireEdge = pressedFire && !localFireWasDown;
+      if (fireEdge) localFireHeldSince = now;
+      if (!pressedFire) localFireHeldSince = 0;
+      localFireWasDown = pressedFire;
+      const equippedId = latestLocalInventory[selectedWeapon];
+      const isAutomatic = equippedId === 1 || equippedId === 2 || equippedId === 3;
+      // Semi-auto Glock/Shotgun: one shot per press, even if the browser reports a longer click.
+      // AK/M249/M134: fire once immediately, then repeat only after an intentional hold.
+      const shotRequested = fireEdge || (isAutomatic && pressedFire && localFireHeldSince > 0 && now - localFireHeldSince >= AUTO_FIRE_HOLD_DELAY_MS);
+      // Client prediction is render-only; authoritative damage and projectiles still come from sim.ts.
+      predictLocalShotFromInput(shotRequested, angle, now, keys.keys.has('g'));
       return {
         move: [Math.round(mx * 127), Math.round(my * 127)],
         aim,
