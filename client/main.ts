@@ -25,9 +25,8 @@ const WEAPON_COLORS = ['#ffe07a', '#ffd16a', '#ffb347', '#ff8f53', '#fff0b0'];
 // Keep in sync with sim.ts so a rendered barrel and its authoritative shot share an origin.
 const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 24, 25];
 const WEAPON_MUZZLE_SIDE = 8;
-// Match the simulation's 20 Hz cooldowns locally. The SDK predicts the local player's world;
-// render local-owned bullets from `self` and remote-owned bullets from interpolated `state` so each
-// projectile shares a timeline with its shooter, without drawing both versions of the same shot.
+// Match the simulation's 20 Hz cooldowns locally. In the v32 world-prediction experiment,
+// player poses and every projectile are rendered from the same SDK-predicted world state.
 const CLIENT_TICK_MS = 50;
 const CLIENT_WEAPON_COOLDOWN_TICKS = [8, 7, 3, 3, 12];
 let localShotToken = 0;
@@ -775,41 +774,24 @@ function authoritativeShotKey(b: any): string {
   const token = Math.round(Number(b?.shotToken) || 0);
   return owner && token > 0 ? `${owner}:${token}` : '';
 }
-function drawSynchronizedBullets(
-  ctx: CanvasRenderingContext2D,
-  roomBulletsInput: any[],
-  predictedSelfBulletsInput: any,
-  localPlayerId: string,
-): void {
-  // IMPORTANT: with predict:'self', `self` is the SDK's predicted copy of the whole world at
-  // the local player's clock, while `state` is the interpolated room world. Drawing local bullets
-  // from `state` but the local character from `self` made shots visibly start behind/outside the
-  // weapon. Draw local-owned bullets ONLY from `self`, and remote-owned bullets ONLY from `state`.
-  // This is exact by owner and shotKey/pelletIndex; it does not guess matches by proximity or render
-  // a separate custom projectile, so the same local shot cannot be drawn twice.
-  const roomBullets = Array.isArray(roomBulletsInput) ? roomBulletsInput : [];
-  const usePredictedSelf = Array.isArray(predictedSelfBulletsInput);
-  const selfBullets = usePredictedSelf ? predictedSelfBulletsInput as any[] : roomBullets;
-  const drawnKeys = new Set<string>();
-  const drawOne = (bullet: any) => {
+function drawSynchronizedBullets(ctx: CanvasRenderingContext2D, bulletsInput: any[]): void {
+  // EXPERIMENTAL world-prediction mode: the SDK documents `state` and `self` as the same
+  // predicted world. Draw exactly one bullet collection; do not partition two timelines (room vs
+  // self) or render a second local copy.
+  const bullets = Array.isArray(bulletsInput) ? bulletsInput : [];
+  const seen = new Set<string>();
+  for (const bullet of bullets) {
     const x = Number(bullet?.x), y = Number(bullet?.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const id = Number(bullet?.id);
     const shotKey = authoritativeShotKey(bullet);
     const pelletIndex = Math.round(Number(bullet?.pelletIndex) || 0);
-    const key = shotKey ? `${shotKey}#${pelletIndex}` : `id:${String(bullet?.owner || '')}:${String(bullet?.id)}`;
-    if (drawnKeys.has(key)) return;
-    drawnKeys.add(key);
+    const key = Number.isFinite(id)
+      ? `id:${id}`
+      : shotKey ? `${shotKey}#${pelletIndex}` : `owner:${String(bullet?.owner || '')}:${x}:${y}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     drawBulletGlyph(ctx, x, y, bullet?.color || '#ffd16a');
-  };
-  // Remote players and their bullets share the room's interpolation timeline.
-  for (const bullet of roomBullets) {
-    if (usePredictedSelf && String(bullet?.owner || '') === localPlayerId) continue;
-    drawOne(bullet);
-  }
-  // The local player's projectile copy is taken from the very same predicted world as their sprite.
-  for (const bullet of selfBullets) {
-    if (String(bullet?.owner || '') !== localPlayerId) continue;
-    drawOne(bullet);
   }
 }
 
@@ -869,9 +851,8 @@ function drawCollisionDebugWorld(ctx: CanvasRenderingContext2D, state: any): voi
 function seedLocalShotTokenBaseline(playerState: any): void {
   if (localShotTokenBaselineReady || !playerState) return;
   let raw = Number(playerState.clientShotToken);
-  // With predict:'self', the local player may live in `self` and be absent from the raw
-  // `state.players` record. Seed from the merged local player first, then fall back to the
-  // confirmed room state. This is only called until the first baseline is established.
+  // Seed from the merged local player first, then fall back to the confirmed room state. This
+  // keeps reconnects compatible with either prediction mode during comparison. This is only called until the first baseline is established.
   if (!Number.isFinite(raw)) {
     try {
       const confirmed = currentGame?.inspect?.()?.confirmed?.state?.players?.[activePlayerId];
@@ -899,8 +880,8 @@ function drawGame(state: any, self: any, playerId: string): void {
   updateAuthoritativeMuzzleFlashes(s.shotTrace || [], playerId, renderNow);
   updateWeaponAudio(s.players, playerId);
   updateDeathAudio(s.players, mine, playerId);
-  // With predict:'self', local movement and local projectiles are predicted in `self`; remote
-  // players and remote projectiles remain on the room-interpolated timeline. Never mix them.
+  // In v32 predict:'world', the SDK supplies one shared predicted world for player and projectile
+  // rendering. The v31 self-prediction package remains available as a rollback baseline.
   const fit = Math.min(view.width / 960, view.height / 640);
   const zoom = Math.max(0.68, Math.min(1.35, fit * 1.2));
   const visibleW = view.width / zoom;
@@ -922,17 +903,17 @@ function drawGame(state: any, self: any, playerId: string): void {
   drawWallsLayer(ctx, visible);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
-  // All visible projectiles use the same authoritative source on local and remote clients.
-  drawSynchronizedBullets(ctx, s.bullets || [], self?.bullets, playerId);
+  // World-prediction experiment: state and self represent one predicted world, so draw one list.
+  drawSynchronizedBullets(ctx, s.bullets || []);
   for (const p of s.particles || []) {
     const alpha = Math.max(0.08, Math.min(1, p.life / 25));
     ctx.save(); ctx.globalAlpha = alpha; ctx.translate(p.x, p.y); ctx.rotate(p.rotation || 0);
     ctx.fillStyle = p.color; ctx.fillRect(-p.size / 2, -p.size / 2, p.size, Math.max(2, p.size * 0.7)); ctx.restore();
   }
   for (const [id, p] of Object.entries(s.players) as [string, any][]) {
-    // Render the local player's orientation from the latest cursor sample so the weapon, muzzle
-    // flash and predicted bullet use one angle even between the 20 Hz simulation ticks.
-    const renderPlayer = id === playerId ? { ...p, aimAngle: latestLocalAimAngle } : p;
+    // In world-prediction mode, render every player's weapon and body from the same predicted
+    // simulation snapshot as the bullets. Do not override the local pose with a newer cursor angle.
+    const renderPlayer = p;
     ctx.save(); ctx.translate(renderPlayer.x, renderPlayer.y);
     if (renderPlayer.invulnerable > 0 && Math.floor(renderPlayer.invulnerable / 4) % 2 === 0) ctx.globalAlpha = 0.5;
     ctx.fillStyle = 'rgba(20,30,35,.24)'; ctx.beginPath(); ctx.ellipse(0, 13, 20, 10, 0, 0, Math.PI * 2); ctx.fill();
@@ -949,7 +930,7 @@ function drawGame(state: any, self: any, playerId: string): void {
     }
     // The selected field is a slot index; the item in that slot is the actual weapon ID.
     // Empty slots rely on the character sprite's built-in hands; no extra fist layer is drawn.
-    const equippedWeaponId = Array.isArray(renderPlayer.inventory) ? renderPlayer.inventory[id === playerId ? selectedWeapon : renderPlayer.weapon] : 0;
+    const equippedWeaponId = Array.isArray(renderPlayer.inventory) ? renderPlayer.inventory[renderPlayer.weapon] : 0;
     if (typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPON_NAMES.length) {
       drawWeaponLocal(ctx, equippedWeaponId, 1);
     }
@@ -1267,11 +1248,11 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   const resolvedToken = finiteMetric(mine.lastResolvedClientShotToken);
   const queued = Array.isArray(mine.pendingShots) ? mine.pendingShots.length : 0;
   const mismatch = netDiagnostics.desyncDisagreed;
-  lines.push(`PREDICTION ${netDiagnostics.mode} · local player predicted, room authoritative`);
-  lines.push(`RECONCILIATION SDK rollback/replay · self prediction`);
-  lines.push(`REMOTE BUFFER SDK interpolation · no second custom buffer`);
+  lines.push(`PREDICTION CONFIG WORLD TEST · runtime ${netDiagnostics.mode}`);
+  lines.push(`RECONCILIATION SDK rollback/replay · WORLD prediction experiment`);
+  lines.push(`REMOTE PLAYERS WORLD-predicted · remote interpolation bypassed for this test`);
   lines.push(`SIM deterministic Planck · canonical rebuild every 100 frames`);
-  lines.push(`SHOTS local bullets=self predicted · remote bullets=room interpolated · owner partition`);
+  lines.push(`SHOTS one shared state.bullets list · dedupe by bullet id · no local bullet copy`);
   lines.push(`FPS ${displayedFps || '--'} · PING ${displayedPingMs == null ? '--' : displayedPingMs + ' ms'} · AVG/MAX ${avgPing == null ? '--' : avgPing}/${maxPing == null ? '--' : maxPing} ms`);
   lines.push(`FRAMES confirmed ${confirmed ?? '--'} · predicted ${predicted ?? '--'} · gap ${frameGap ?? '--'}`);
   lines.push(`INPUT LEAD ON · measured ${netDiagnostics.leadMs == null ? '--' : Math.round(netDiagnostics.leadMs) + ' ms'} · MARGIN ${netDiagnostics.marginMs == null ? '--' : Math.round(netDiagnostics.marginMs) + ' ms'}`);
@@ -1881,8 +1862,8 @@ async function startWorker(): Promise<void> {
   const game = await playInWorker({
     // Keep the SDK's normal input lead explicitly enabled. Local prediction still gives the
     // controlled player immediate movement; the room applies inputs in the scheduled frames and
-    // the SDK reconciles/replays predictions against authoritative snapshots. Do not disable this
-    // for a game using self prediction, physics, and remote-player interpolation.
+    // the SDK reconciles/replays predictions against authoritative snapshots. This v32 test uses
+    // predict:'world'; compare it with the v31 self-prediction package and revert if it snaps remotely.
     inputLead: true,
     input: () => {
       if (keys.pressed('1')) selectedWeapon = 0;
@@ -1925,8 +1906,8 @@ async function startWorker(): Promise<void> {
       // Semi-auto Glock/Shotgun: one shot per press, even if the browser reports a longer click.
       // AK/M249/M134: fire once immediately, then repeat only after an intentional hold.
       const shotRequested = fireEdge || (isAutomatic && pressedFire && localFireHeldSince > 0 && now - localFireHeldSince >= AUTO_FIRE_HOLD_DELAY_MS);
-      // Register a discrete shot token. The SDK's predicted local world provides the local bullet;
-      // remote bullets remain interpolated from the room state. The renderer partitions by owner.
+      // Register a discrete shot token. In world prediction, the SDK's shared predicted world is
+      // the single source for local and remote projectiles, so the renderer does not partition timelines.
       registerLocalShotInput(shotRequested, now, keys.keys.has('g'));
       const selectedItemId = latestLocalInventory[selectedWeapon];
       const shotWeaponId = typeof selectedItemId === 'number' ? selectedItemId : 255;
