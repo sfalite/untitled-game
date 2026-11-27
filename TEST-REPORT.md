@@ -42,7 +42,7 @@ The renderer had mixed timelines: the player sprite used the SDK's local predict
 
 ## Local verification
 - TypeScript `tsc --noEmit` passed with temporary ambient module declarations for unavailable SDK packages.
-- Static invariants verified: 1000 building HP, 6000-tick respawn, collider destroyed/recreated, building collision skips inactive buildings, bullet hit applies damage to building, empty slot and knife melee can damage props/buildings, knife damage is exactly 2x fist damage, and crate loot includes knife without Glock.
+- Static invariants verified: 1000 building HP, 6000-tick respawn, collider destroyed/recreated, building collision skips inactive buildings, bullet hit applies damage to building, empty slot and knife melee can damage props/buildings, knife damage was 24 HP in v33 (superseded by v35, which sets it to 36 HP), and crate loot includes knife without Glock.
 - ZIP structure/integrity verified.
 
 ## Not run

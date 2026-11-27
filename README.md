@@ -39,7 +39,7 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 30 --shots 3,
 ## Update v33: destructible buildings and melee loot
 
 - All 49 buildings have 1000 HP. Bullets and melee attacks damage the first building hit; destroyed buildings lose their physical collider and visual, then respawn after 6000 simulation frames (5 minutes at 20 Hz).
-- Empty inventory slots use fist melee and can damage players, props, and buildings. Fists deal 12 damage; the collectible knife deals 24 damage (2x) with the same melee reach/cooldown.
+- Empty inventory slots use fist melee and can damage players, props, and buildings. Fists deal 12 damage; the collectible knife deals 36 damage (3x) with the same melee reach/cooldown.
 - Brown crates keep their normal 55% loot chance and can now choose AK-47, M249, M134, Shotgun, or Knife. The starting Glock is not crate loot.
 - The knife is inventory item ID 5 and can be picked up or dropped with the existing E/G flow. Gun firing logic remains restricted to the five firearm IDs.
 
@@ -54,3 +54,13 @@ The v33 package is based on the v32 `predict: 'world'` experiment. The new gamep
 - Respawn/death sequence changes and newly joined players reset the visual cache so they appear at their new spawn rather than sliding across the map. F3 exposes the number of detected visual corrections and current maximum offset.
 
 The build passed a local TypeScript check and isolated tests of normal movement, a large remote pose correction, gradual convergence, respawn reset, and cache expiry. The official modd.io SDK test and live room test remain unrun in this environment.
+
+
+## Update v35 — melee audio and hydrant water
+- `sharp-swing.mp3` plays on accepted fist punches and knife swings.
+- `universfield-punch-140236.mp3` plays only when a melee attack successfully damages an opponent. Deterministic per-player sequence counters prevent replaying the same sound after world prediction rollback.
+- Knife damage is 36 HP per hit.
+- Destroying a hydrant creates a 150x150 visual water decal at its world position. It expires after 3,000 simulation frames (150 seconds at 20 Hz), and has no physics body or collision.
+- Removed the compact lower-left control/help HUD that displayed the F4 hitbox hint. F3 diagnostics remain available.
+
+Apply the files together so `sim.ts`, `client/main.ts`, and the supplied audio/image assets remain in sync.

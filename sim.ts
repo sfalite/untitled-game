@@ -39,11 +39,12 @@ const PICKUP_RADIUS = 64;
 const MAX_WEAPON_PICKUPS = 80;
 const PUNCH_DAMAGE = 12;
 const KNIFE_ITEM_ID = 5;
-const KNIFE_DAMAGE = PUNCH_DAMAGE * 2;
+const KNIFE_DAMAGE = 36;
 const PUNCH_RANGE = 50;
 const PUNCH_COOLDOWN = 13;
 const BUILDING_MAX_HP = 1000;
 const BUILDING_RESPAWN_TICKS = 5 * 60 * 20; // Five minutes at 20 simulation ticks per second.
+const WATER_PUDDLE_LIFETIME_TICKS = 150 * 20; // 2 minutes 30 seconds at 20 ticks/s.
 
 // Planck keeps contact/broad-phase history, so rebuild its canonical world periodically.
 const box2dPhysics: any = planck({ gravity: { x: 0, y: 0 } });
@@ -169,19 +170,22 @@ type Player = {
   fireCooldowns: number[]; smashCooldown: number; punchCooldown: number; punchFlash: number;
   score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number; shotWeapon: number;
   deathSeq: number; deathX: number; deathY: number;
+  meleeSeq: number; meleeHitSeq: number; meleeEventKey: string; meleeHitEventKey: string;
 };
 type WeaponPickup = { id: number; x: number; y: number; weaponId: number; angle: number; createdFrame: number };
 type Bullet = { id: number; owner: string; shotSeq: number; shotToken: number; shotKey: string; pelletIndex: number; x: number; y: number; weaponId: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
 type Particle = { id: number; body: number; x: number; y: number; life: number; size: number; color: string; rotation: number };
+// Purely visual water left where a red hydrant is destroyed; never creates a physics body.
+type WaterPuddle = { id: number; x: number; y: number; expiresAtFrame: number };
 type ShotTraceKind = 'request' | 'spawn' | 'hit' | 'expired' | 'rejected';
 type ShotTraceEvent = {
   id: number; frame: number; kind: ShotTraceKind; owner: string; token: number; weaponId: number;
   pelletIndex: number; x: number; y: number; target: string; detail: string; angle?: number;
 };
 type State = {
-  players: Record<string, Player>; buildings: BuildingState[]; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[];
+  players: Record<string, Player>; buildings: BuildingState[]; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[]; waterPuddles: WaterPuddle[];
   shotTrace: ShotTraceEvent[]; nextShotTraceId: number;
-  nextBulletId: number; nextParticleId: number; nextPickupId: number;
+  nextBulletId: number; nextParticleId: number; nextPickupId: number; nextWaterPuddleId: number;
 };
 
 const PROP_SEEDS: Array<{x:number;y:number;kind:PropKind;variant?:number}> = [
@@ -500,6 +504,17 @@ function freeInventorySlot(p: Player): number {
   if (p.inventory[p.weapon] == null) return p.weapon;
   return p.inventory.findIndex((weaponId) => weaponId == null);
 }
+function addWaterPuddle(state: State, prop: Prop, ctx: any): void {
+  // Water is a render-only effect: it has no Planck body, collider, or gameplay interaction.
+  if (!Array.isArray(state.waterPuddles)) state.waterPuddles = [];
+  if (!Number.isFinite(state.nextWaterPuddleId)) state.nextWaterPuddleId = 1;
+  state.waterPuddles.push({
+    id: state.nextWaterPuddleId++, x: prop.x, y: prop.y,
+    expiresAtFrame: ctx.frame + WATER_PUDDLE_LIFETIME_TICKS,
+  });
+  // Keep the state bounded in the unlikely case of rapid hydrant destruction over a long session.
+  if (state.waterPuddles.length > 100) state.waterPuddles.splice(0, state.waterPuddles.length - 100);
+}
 function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null): void {
   if (!prop.active) return;
   prop.active = false;
@@ -508,6 +523,8 @@ function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null):
   prop.body = -1;
   if (player) player.score += propPoints(prop.kind);
   addParticles(state, ctx, prop.x, prop.y, prop.kind, prop.kind === 'car' ? 18 : 11);
+  // A destroyed red hydrant leaves a large, non-colliding puddle for 150 seconds.
+  if (prop.kind === 'hydrant') addWaterPuddle(state, prop, ctx);
   // Brown crates have a deterministic chance to spill a collectible gun or knife.
   if (prop.kind === 'crate' && state.pickups.length < MAX_WEAPON_PICKUPS && ctx.rng() < WEAPON_DROP_CHANCE) {
     const weaponId = 1 + ctx.int(5); // AK-47, M249, M134, Shotgun or knife; never the starting Glock.
@@ -576,7 +593,7 @@ function recordShotTrace(
 
 export default defineSim({
   name: 'chaos-city',
-  version: '31',
+  version: '32',
   tickRate: 20,
   maxPlayers: 32,
   // Keep world prediction enabled so player poses, weapons, bullets, and collisions share one
@@ -609,9 +626,9 @@ export default defineSim({
     const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, mapX: p.x, mapY: p.y, prevX: p.x, prevY: p.y, prevAngle: 0, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0, health: propMaxHealth(p.kind) }));
     for (const prop of props) prop.body = makePropBody(world, prop);
     return {
-      players: {}, buildings, props, pickups: [], bullets: [], particles: [],
+      players: {}, buildings, props, pickups: [], bullets: [], particles: [], waterPuddles: [],
       shotTrace: [], nextShotTraceId: 1,
-      nextBulletId: 1, nextParticleId: 1, nextPickupId: 1,
+      nextBulletId: 1, nextParticleId: 1, nextPickupId: 1, nextWaterPuddleId: 1,
     };
   },
 
@@ -627,6 +644,7 @@ export default defineSim({
       fireCooldowns: [0, 0, 0, 0, 0], smashCooldown: 0, punchCooldown: 0, punchFlash: 0, score: 0, health: 100, invulnerable: 45,
       color: ctx.int(6), muzzleFlash: 0, shotSeq: 0, shotWeapon: 0,
       deathSeq: 0, deathX: spawn.x, deathY: spawn.y,
+      meleeSeq: 0, meleeHitSeq: 0, meleeEventKey: '', meleeHitEventKey: '',
     };
   },
 
@@ -705,6 +723,8 @@ export default defineSim({
 
   step(state, ctx) {
     const world: any = ctx.physics;
+    // Timed visual puddles expire from simulation frame time so all clients agree exactly.
+    state.waterPuddles = (state.waterPuddles || []).filter((puddle) => ctx.frame < puddle.expiresAtFrame);
     for (const building of state.buildings) {
       if (!building.active && ctx.frame >= building.respawnAt) {
         const rect = BUILDINGS[building.index];
@@ -823,11 +843,13 @@ export default defineSim({
       }
       const equippedWeaponId = p.inventory[p.weapon];
       const hasKnife = equippedWeaponId === KNIFE_ITEM_ID;
-      // Empty slots perform a fist punch; the knife performs the same melee trace with double damage.
+      // Empty slots perform a fist punch; the knife deals 36 damage per melee hit.
       // Melee chooses the earliest thing along the reach, so walls/trees/objects cannot be punched through.
       if (p.fire && (equippedWeaponId == null || hasKnife) && p.punchCooldown <= 0 && !p.drop) {
         p.punchCooldown = PUNCH_COOLDOWN;
         p.punchFlash = 5;
+        p.meleeSeq = (Number(p.meleeSeq) || 0) + 1;
+        p.meleeEventKey = `swing:${ctx.frame}:${p.meleeSeq}`;
         const fx = Math.cos(p.aimAngle), fy = Math.sin(p.aimAngle);
         const damage = hasKnife ? KNIFE_DAMAGE : PUNCH_DAMAGE;
         const endX = p.x + fx * PUNCH_RANGE, endY = p.y + fy * PUNCH_RANGE;
@@ -869,6 +891,8 @@ export default defineSim({
           } else if (meleeHit.kind === 'player' && meleeHit.playerId) {
             const target = state.players[meleeHit.playerId];
             if (target && target.invulnerable <= 0) {
+              p.meleeHitSeq = (Number(p.meleeHitSeq) || 0) + 1;
+              p.meleeHitEventKey = `hit:${ctx.frame}:${p.meleeHitSeq}`;
               target.health -= damage;
               const targetBody = bodyFromId(world, target.body);
               if (targetBody) {
