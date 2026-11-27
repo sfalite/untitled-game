@@ -44,3 +44,13 @@ Run `npx moddio test`, then `npx moddio play --players 2 --seconds 30 --shots 3,
 - The knife is inventory item ID 5 and can be picked up or dropped with the existing E/G flow. Gun firing logic remains restricted to the five firearm IDs.
 
 The v33 package is based on the v32 `predict: 'world'` experiment. The new gameplay logic has passed TypeScript/static validation, but the official modd.io test and a live multiplayer room still need to be run before publishing.
+
+
+## Update v34 — remote visual correction smoothing (keeps predict: world)
+
+- Kept `predict: 'world'`; no switch to `self` and no changes to the authoritative simulation, Planck bodies, collisions, shots, damage, inventory, or the knife.
+- Added a client-render-only correction smoother for remote player sprites. When a remote pose changes by more than plausible movement for that render interval, the renderer preserves the last displayed position and decays a temporary visual offset over 160 ms. Normal movement remains direct; local predicted movement remains immediate.
+- Remote player's weapon, shadow, name, and health bar use that same smoothed display pose, so the weapon remains attached to the character. Projectiles, hitboxes, and authoritative state are not shifted.
+- Respawn/death sequence changes and newly joined players reset the visual cache so they appear at their new spawn rather than sliding across the map. F3 exposes the number of detected visual corrections and current maximum offset.
+
+The build passed a local TypeScript check and isolated tests of normal movement, a large remote pose correction, gradual convergence, respawn reset, and cache expiry. The official modd.io SDK test and live room test remain unrun in this environment.

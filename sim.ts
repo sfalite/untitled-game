@@ -579,10 +579,9 @@ export default defineSim({
   version: '31',
   tickRate: 20,
   maxPlayers: 32,
-  // EXPERIMENTAL v32: predict the whole shared world so player, weapon pose, bullets, and
-  // collision state are drawn from one prediction timeline. This can cost more CPU and may make
-  // remote bodies snap when Planck is corrected. Test with 2-3 live clients before keeping it.
-  // Roll back to predict: 'self' if remote players jitter/teleport or CPU use becomes excessive.
+  // Keep world prediction enabled so player poses, weapons, bullets, and collisions share one
+  // predicted timeline. Remote rollback corrections are softened in the CLIENT RENDERER only;
+  // do not change prediction mode as part of the visual-smoothing fix.
   predict: 'world',
   physics: box2dPhysics,
   input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', shotToken: 'u32', shotWeapon: 'u8', buttons: { flags: ['fire', 'smash', 'pickup', 'drop'] } },

@@ -47,3 +47,21 @@ The renderer had mixed timelines: the player sprite used the SDK's local predict
 
 ## Not run
 - `npx moddio test`, `npx moddio play`, and live modd.io multiplayer were not run in this environment. Building destruction/respawn and weapon pickup must be validated in an actual modd.io room before publishing.
+
+
+# Update v34 — visual smoothing for remote players while retaining world prediction
+
+## Changes
+- Preserved `predict: 'world'` exactly as requested. No changes to the authoritative simulation or physics driver.
+- Added display-only smoothing for abnormal position corrections on remote player avatars. It uses the difference between consecutive SDK render states to detect a correction larger than plausible movement for that render interval, holds the previously displayed position for continuity, then decays an offset with a 160 ms time constant.
+- Normal movement is not filtered, and the local controlled player is not smoothed. The remote player's weapon, shadow, name and health bar use the same displayed pose. Bullets, collision shapes, damage and state remain in unmodified simulation coordinates.
+- Respawn/death sequence change and cache expiration reset the display pose instead of interpolating across the entire map. F3 shows correction count and current maximum visual offset.
+
+## Local checks
+- TypeScript no-emit check passed with temporary ambient declarations for SDK modules.
+- Isolated tests passed for: initialization without offset, ordinary 5.2 px/tick movement not triggering correction, large remote position correction remaining visually continuous on the correction frame, offset gradually decaying toward target, respawn sequence change snapping to spawn, and stale cache expiration.
+- Static check confirmed `predict: 'world'` remains set and `sim.ts` gameplay/physics logic is unchanged.
+- ZIP structure and CRC verified.
+
+## Not run
+- `npx moddio test`, `npx moddio play`, and a live 2–3 player modd.io room were not run here. Because world prediction can snap remote states during rollback, live validation is required to tune the display correction thresholds. This patch addresses the visual presentation only; it does not suppress or alter authoritative movement corrections.

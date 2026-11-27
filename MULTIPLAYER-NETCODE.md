@@ -39,3 +39,8 @@ In the v31 `predict: 'self'` baseline, the local player's sprite is rendered fro
 ## v32 world prediction experiment
 
 In the v32 test package, `sim.ts` sets `predict: 'world'`. The renderer draws all projectiles once from `s.bullets`, uses the player aim angle from the same simulation snapshot (no override from the current cursor), and chooses the equipped weapon from `renderPlayer.weapon`. This deliberately tests one timeline for player/weapon/bullets. Test with two and three real modd.io clients; if remote players snap, jitter, or CPU rises, restore the v31 package using `predict: 'self'`.
+
+
+## Remote visual correction smoothing (v34)
+
+The game remains in `predict: 'world'`. The renderer now softens only abnormal position corrections for remote avatars. This is presentation-only: simulation coordinates, hitboxes, projectiles, and damage continue using the SDK world state. Local movement is not filtered. F3 reports the correction count and maximum active visual offset.
