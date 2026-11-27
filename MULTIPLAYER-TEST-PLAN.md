@@ -57,3 +57,11 @@ The F3 panel reads values exposed by the SDK. Some fields may show `--` if unava
 | Turn cursor immediately after firing | Muzzle flash stays at the origin/angle of that shot instead of following the new cursor | Local and remote spawn trace x/y/angle |
 | Enable F4 and fire | Only one visual bullet remains; F4 overlays hitboxes but no duplicate bullet dot | Compare standard bullet glyph with diagnostics |
 | Fire fast with two players | No stale queued burst; superseded requests are explicitly rejected | Request/spawn/rejected trace tokens |
+
+## Update v33 additions
+
+1. **Building health and respawn:** shoot one building until its HP reaches 0. Confirm the building art and collision disappear, then confirm it returns after 6000 simulation frames (300 seconds at 20 Hz) with 1000 HP and a physical collider.
+2. **Fist melee vs props/buildings:** select an empty slot, aim at a crate and click/hold attack. A 20 HP crate should require two fist hits at 12 damage each; buildings should lose 12 HP per hit and stop the melee trace when they block it.
+3. **Knife loot:** destroy brown crates repeatedly. Their overall drop chance stays at 55%; valid loot choices are AK-47, M249, M134, Shotgun and Knife, never Glock. Pick up the knife with E, equip its slot, and confirm one hit deals 24 damage (twice the 12-damage fist).
+4. **Inventory/drop:** drop the knife with G and pick it up again with E. Check a full inventory can't pick up a floor item, and ensure selecting a knife does not create a firearm projectile or gunshot sound.
+5. **Multiplayer consistency:** have two players shoot and punch the same building/prop. Confirm HP changes once per accepted hit, both players see the same active/destroyed state, and respawn timing agrees.

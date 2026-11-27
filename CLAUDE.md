@@ -14,7 +14,7 @@ This repository is a 2D top-down city game using the modd.io SDK. Read `llms.txt
 - Keep visible UI in English and support keyboard, mouse and touch.
 - Custom main menu (`"menu": true`) uses `pageRooms()` / `joinRoom()` / `switchRoom()`; M returns to the menu.
 - World size is 2688×2688; roads remain unmarked. Keep client and sim building/tree/prop layouts synchronized. Tree art is 128×128, but trunk collision is only a 15×15 circle. Player artwork and physics box are 43×35.
-- Five inventory slots: Glock-17 starts in slot 1; AK-47, M249, M134 Minigun and Shotgun are collectible; remaining slots start empty. E picks up, G drops, empty slots punch. Standard props have 20 HP; cars 200 HP.
+- Five inventory slots: Glock-17 starts in slot 1; AK-47, M249, M134 Minigun, Shotgun and Knife are collectible from brown crates; remaining slots start empty. E picks up, G drops, empty slots punch, and knife deals twice punch damage. Standard props have 20 HP, cars 200 HP, and buildings 1000 HP with a five-minute respawn.
 - Weapon audio uses `fire_pistol.mp3` for Glock, `fire_rifle.mp3` for AK/M249, `fire_minigun.mp3` for M134, and `fire_shotgun.mp3` for Shotgun.
 
 ## Prediction, firing and networking

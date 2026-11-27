@@ -34,3 +34,13 @@ World prediction may improve alignment because players, weapons, and bullets sha
 
 ## Official checks
 Run `npx moddio test`, then `npx moddio play --players 2 --seconds 30 --shots 3,10,20` and `npx moddio play --players 3 --seconds 60 --shots 5,15,30`, followed by live browser testing. Do not publish based only on static compilation. This archive has not been verified in a live modd.io room from this environment.
+
+
+## Update v33: destructible buildings and melee loot
+
+- All 49 buildings have 1000 HP. Bullets and melee attacks damage the first building hit; destroyed buildings lose their physical collider and visual, then respawn after 6000 simulation frames (5 minutes at 20 Hz).
+- Empty inventory slots use fist melee and can damage players, props, and buildings. Fists deal 12 damage; the collectible knife deals 24 damage (2x) with the same melee reach/cooldown.
+- Brown crates keep their normal 55% loot chance and can now choose AK-47, M249, M134, Shotgun, or Knife. The starting Glock is not crate loot.
+- The knife is inventory item ID 5 and can be picked up or dropped with the existing E/G flow. Gun firing logic remains restricted to the five firearm IDs.
+
+The v33 package is based on the v32 `predict: 'world'` experiment. The new gameplay logic has passed TypeScript/static validation, but the official modd.io test and a live multiplayer room still need to be run before publishing.

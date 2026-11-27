@@ -38,14 +38,19 @@ const WEAPON_DROP_CHANCE = 0.55;
 const PICKUP_RADIUS = 64;
 const MAX_WEAPON_PICKUPS = 80;
 const PUNCH_DAMAGE = 12;
+const KNIFE_ITEM_ID = 5;
+const KNIFE_DAMAGE = PUNCH_DAMAGE * 2;
 const PUNCH_RANGE = 50;
 const PUNCH_COOLDOWN = 13;
+const BUILDING_MAX_HP = 1000;
+const BUILDING_RESPAWN_TICKS = 5 * 60 * 20; // Five minutes at 20 simulation ticks per second.
 
 // Planck keeps contact/broad-phase history, so rebuild its canonical world periodically.
 const box2dPhysics: any = planck({ gravity: { x: 0, y: 0 } });
 box2dPhysics.canonicalEvery = 100;
 
 type Rect = { x: number; y: number; w: number; h: number; color: string; style: number };
+type BuildingState = { index: number; health: number; active: boolean; respawnAt: number; body: number };
 const BUILDINGS: Rect[] = [
   {x:32,y:38,w:220,h:224,color:'#c78b4a',style:0},
   {x:478,y:38,w:160,h:224,color:'#d47b37',style:1},
@@ -174,7 +179,7 @@ type ShotTraceEvent = {
   pelletIndex: number; x: number; y: number; target: string; detail: string; angle?: number;
 };
 type State = {
-  players: Record<string, Player>; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[];
+  players: Record<string, Player>; buildings: BuildingState[]; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[];
   shotTrace: ShotTraceEvent[]; nextShotTraceId: number;
   nextBulletId: number; nextParticleId: number; nextPickupId: number;
 };
@@ -250,8 +255,8 @@ function unwrapAngleNear(reference: number, wrappedTarget: number): number {
   else if (delta <= -Math.PI) delta += turn;
   return reference + delta;
 }
-function blocked(x: number, y: number): boolean {
-  if (BUILDINGS.some((b) => circleHitsRect(x, y, PLAYER_SPAWN_R, b))) return true;
+function blocked(x: number, y: number, state?: any): boolean {
+  if (BUILDINGS.some((b, i) => state?.buildings?.[i]?.active !== false && circleHitsRect(x, y, PLAYER_SPAWN_R, b))) return true;
   return TREES.some((t) => {
     const dx = x - t.x, dy = y - t.y;
     const combinedRadius = PLAYER_SPAWN_R + t.r;
@@ -261,7 +266,7 @@ function blocked(x: number, y: number): boolean {
 function openSpawn(ctx: any, state?: any, excludedPlayer = ''): {x:number;y:number} {
   for (let tries = 0; tries < 100; tries++) {
     const x = 40 + ctx.rng() * (W - 80), y = 40 + ctx.rng() * (H - 80);
-    if (blocked(x, y)) continue;
+    if (blocked(x, y, state)) continue;
     const overlapsProp = (state?.props || []).some((prop: any) => {
       if (!prop.active) return false;
       const dx = x - prop.x, dy = y - prop.y, r = PLAYER_SPAWN_R + propRadius(prop.kind) + 5;
@@ -293,8 +298,16 @@ function makeStaticBox(world: any, x: number, y: number, halfW: number, halfH: n
   body.createFixture(pl.Box(halfW / PPM, halfH / PPM), { density: 0, friction, restitution: 0.03 });
   return bodyId(world, body);
 }
-function makeMapPhysics(world: any): void {
-  for (const b of BUILDINGS) makeStaticBox(world, b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0.9);
+function makeBuildingBody(world: any, b: Rect): number {
+  return makeStaticBox(world, b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0.9);
+}
+function makeMapPhysics(world: any, buildingStates: BuildingState[]): void {
+  // Track each static building collider by ID so a destroyed building can be removed from
+  // physical collisions and recreated deterministically when its respawn timer expires.
+  for (let i = 0; i < BUILDINGS.length; i++) {
+    const body = makeBuildingBody(world, BUILDINGS[i]);
+    if (buildingStates[i]) buildingStates[i].body = body;
+  }
   for (const t of TREES) {
     const body = world.createBody({ type: 'static', position: pl.Vec2(t.x / PPM, t.y / PPM) });
     // Artwork remains 128x128, but only the trunk blocks movement: a 15x15 circle.
@@ -432,14 +445,14 @@ function segmentEntryOrientedBox(x0: number, y0: number, x1: number, y1: number,
   return segmentEntryAabb(lx0, ly0, lx1, ly1,
     -hx - BULLET_RADIUS, -hy - BULLET_RADIUS, hx + BULLET_RADIUS, hy + BULLET_RADIUS);
 }
-function particleColors(kind: PropKind): string[] {
+function particleColors(kind: PropKind | 'building'): string[] {
   if (kind === 'car') return ['#e66a25','#454c52','#9dcbd2','#c0cbd0'];
   if (kind === 'bench' || kind === 'crate') return ['#b77b43','#dba05f','#80512f','#e6b975'];
   if (kind === 'bin') return ['#299c6f','#45ce8b','#d6e3cf'];
   if (kind === 'hydrant' || kind === 'cone') return ['#f17b31','#d95127','#ffe0a2'];
   return ['#d3d6d2','#899a9c','#e7c58b'];
 }
-function addParticles(state: State, ctx: any, x: number, y: number, kind: PropKind, count = 10): void {
+function addParticles(state: State, ctx: any, x: number, y: number, kind: PropKind | 'building', count = 10): void {
   const world = ctx.physics;
   const colors = particleColors(kind);
   for (let i = 0; i < count; i++) {
@@ -466,7 +479,7 @@ function addParticles(state: State, ctx: any, x: number, y: number, kind: PropKi
   }
 }
 function spawnWeaponPickup(state: State, weaponId: number, x: number, y: number, angle: number, frame: number): void {
-  if (weaponId < 0 || weaponId >= WEAPONS.length) return; // Crates never spawn the Glock, but players may drop it.
+  if (!Number.isInteger(weaponId) || weaponId < 0 || weaponId > KNIFE_ITEM_ID) return; // Item IDs 0-4 are guns; 5 is the knife.
   const pickup: WeaponPickup = { id: state.nextPickupId++, x, y, weaponId, angle, createdFrame: frame };
   state.pickups.push(pickup);
   // Keep room state bounded if players repeatedly drop weapons and ignore them.
@@ -495,9 +508,9 @@ function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null):
   prop.body = -1;
   if (player) player.score += propPoints(prop.kind);
   addParticles(state, ctx, prop.x, prop.y, prop.kind, prop.kind === 'car' ? 18 : 11);
-  // Brown crates have a deterministic chance to spill one of the four collectible guns.
+  // Brown crates have a deterministic chance to spill a collectible gun or knife.
   if (prop.kind === 'crate' && state.pickups.length < MAX_WEAPON_PICKUPS && ctx.rng() < WEAPON_DROP_CHANCE) {
-    const weaponId = 1 + ctx.int(4); // AK-47, M249, M134 or Shotgun.
+    const weaponId = 1 + ctx.int(5); // AK-47, M249, M134, Shotgun or knife; never the starting Glock.
     spawnWeaponPickup(state, weaponId, prop.x, prop.y, ctx.rng() * Math.PI * 2, ctx.frame);
   }
 }
@@ -508,6 +521,23 @@ function damageProp(state: State, ctx: any, prop: Prop, damage: number, player: 
   prop.health = Math.max(0, prop.health - damage);
   if (prop.health <= 0) {
     destroyProp(state, ctx, prop, player);
+    return true;
+  }
+  return false;
+}
+function damageBuilding(state: State, ctx: any, index: number, damage: number, player: Player | null): boolean {
+  const building = state.buildings[index];
+  const rect = BUILDINGS[index];
+  if (!building || !rect || !building.active || damage <= 0) return false;
+  if (!Number.isFinite(building.health)) building.health = BUILDING_MAX_HP;
+  building.health = Math.max(0, building.health - damage);
+  if (building.health <= 0) {
+    building.active = false;
+    building.respawnAt = ctx.frame + BUILDING_RESPAWN_TICKS;
+    destroyBody(ctx, building.body);
+    building.body = -1;
+    if (player) player.score += 50;
+    addParticles(state, ctx, rect.x + rect.w / 2, rect.y + rect.h / 2, 'building', 26);
     return true;
   }
   return false;
@@ -546,7 +576,7 @@ function recordShotTrace(
 
 export default defineSim({
   name: 'chaos-city',
-  version: '30',
+  version: '31',
   tickRate: 20,
   maxPlayers: 32,
   // EXPERIMENTAL v32: predict the whole shared world so player, weapon pose, bullets, and
@@ -575,11 +605,12 @@ export default defineSim({
 
   init(ctx): State {
     const world: any = ctx.physics;
-    makeMapPhysics(world);
+    const buildings: BuildingState[] = BUILDINGS.map((_b, index) => ({ index, health: BUILDING_MAX_HP, active: true, respawnAt: 0, body: -1 }));
+    makeMapPhysics(world, buildings);
     const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, mapX: p.x, mapY: p.y, prevX: p.x, prevY: p.y, prevAngle: 0, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0, health: propMaxHealth(p.kind) }));
     for (const prop of props) prop.body = makePropBody(world, prop);
     return {
-      players: {}, props, pickups: [], bullets: [], particles: [],
+      players: {}, buildings, props, pickups: [], bullets: [], particles: [],
       shotTrace: [], nextShotTraceId: 1,
       nextBulletId: 1, nextParticleId: 1, nextPickupId: 1,
     };
@@ -675,6 +706,16 @@ export default defineSim({
 
   step(state, ctx) {
     const world: any = ctx.physics;
+    for (const building of state.buildings) {
+      if (!building.active && ctx.frame >= building.respawnAt) {
+        const rect = BUILDINGS[building.index];
+        if (!rect) continue;
+        building.active = true;
+        building.health = BUILDING_MAX_HP;
+        building.respawnAt = 0;
+        building.body = makeBuildingBody(world, rect);
+      }
+    }
     for (const prop of state.props) {
       if (!prop.active && ctx.frame >= prop.respawnAt) {
         prop.active = true;
@@ -782,40 +823,75 @@ export default defineSim({
         }
       }
       const equippedWeaponId = p.inventory[p.weapon];
-      // Clicking/holding fire on an empty slot becomes a short-range punch, aimed toward the cursor.
-      if (p.fire && equippedWeaponId == null && p.punchCooldown <= 0 && !p.drop) {
+      const hasKnife = equippedWeaponId === KNIFE_ITEM_ID;
+      // Empty slots perform a fist punch; the knife performs the same melee trace with double damage.
+      // Melee chooses the earliest thing along the reach, so walls/trees/objects cannot be punched through.
+      if (p.fire && (equippedWeaponId == null || hasKnife) && p.punchCooldown <= 0 && !p.drop) {
         p.punchCooldown = PUNCH_COOLDOWN;
         p.punchFlash = 5;
         const fx = Math.cos(p.aimAngle), fy = Math.sin(p.aimAngle);
+        const damage = hasKnife ? KNIFE_DAMAGE : PUNCH_DAMAGE;
+        const endX = p.x + fx * PUNCH_RANGE, endY = p.y + fy * PUNCH_RANGE;
+        type MeleeHit = { t: number; kind: 'building' | 'tree' | 'prop' | 'player'; buildingIndex?: number; prop?: Prop; playerId?: string };
+        let meleeHit: MeleeHit | null = null;
+        const considerMelee = (t: number | null, kind: MeleeHit['kind'], buildingIndex?: number, prop?: Prop, playerId?: string) => {
+          if (t == null || !Number.isFinite(t)) return;
+          if (!meleeHit || t < meleeHit.t - 1e-7) meleeHit = { t, kind, buildingIndex, prop, playerId };
+        };
+        for (let bi = 0; bi < BUILDINGS.length; bi++) {
+          if (state.buildings[bi]?.active === false) continue;
+          const b = BUILDINGS[bi];
+          considerMelee(segmentEntryAabb(p.x, p.y, endX, endY,
+            b.x - 5, b.y - 5, b.x + b.w + 5, b.y + b.h + 5), 'building', bi);
+        }
+        for (const tree of TREES) {
+          considerMelee(segmentEntryCircle(p.x, p.y, endX, endY, tree.x, tree.y, tree.r + 5), 'tree');
+        }
+        for (const prop of state.props) {
+          if (!prop.active) continue;
+          const cfg = propPhysics(prop.kind);
+          considerMelee(segmentEntryOrientedBox(p.x - prop.x, p.y - prop.y,
+            endX - prop.x, endY - prop.y, 0, 0, prop.angle || 0, cfg.hx + 4, cfg.hy + 4), 'prop', undefined, prop);
+        }
         for (const targetId of Object.keys(state.players).sort()) {
           if (targetId === id) continue;
           const target = state.players[targetId];
-          const dx = target.x - p.x, dy = target.y - p.y;
-          const d2 = dx * dx + dy * dy;
-          if (d2 > PUNCH_RANGE * PUNCH_RANGE || dx * fx + dy * fy < 8) continue;
-          // Fists also stop at and hit the first player in reach; spawn protection blocks damage.
-          if (target.invulnerable <= 0) {
-            target.health -= PUNCH_DAMAGE;
-            const targetBody = bodyFromId(world, target.body);
-            if (targetBody) {
-              const v = targetBody.getLinearVelocity();
-              targetBody.setLinearVelocity(pl.Vec2(v.x + fx * 1.7, v.y + fy * 1.7));
-            }
-            if (target.health <= 0) {
-              const deadX = target.x, deadY = target.y;
-              target.deathX = deadX; target.deathY = deadY; target.deathSeq++;
-              p.score += 20;
-              const spawn = openSpawn(ctx, state, targetId);
-              target.x = spawn.x; target.y = spawn.y; target.prevX = spawn.x; target.prevY = spawn.y;
-              target.health = 100; target.invulnerable = 55; target.score = Math.max(0, target.score - 15);
+          if (!target) continue;
+          const targetAngle = (target.aimAngle || 0) + Math.PI / 2;
+          const t = segmentEntryOrientedBox(p.x - target.x, p.y - target.y,
+            endX - target.x, endY - target.y, 0, 0, targetAngle, 21.5 + 4, 17.5 + 4);
+          considerMelee(t, 'player', undefined, undefined, targetId);
+        }
+        if (meleeHit) {
+          if (meleeHit.kind === 'prop' && meleeHit.prop) {
+            damageProp(state, ctx, meleeHit.prop, damage, p);
+          } else if (meleeHit.kind === 'building' && typeof meleeHit.buildingIndex === 'number') {
+            damageBuilding(state, ctx, meleeHit.buildingIndex, damage, p);
+          } else if (meleeHit.kind === 'player' && meleeHit.playerId) {
+            const target = state.players[meleeHit.playerId];
+            if (target && target.invulnerable <= 0) {
+              target.health -= damage;
+              const targetBody = bodyFromId(world, target.body);
               if (targetBody) {
-                targetBody.setTransform(pl.Vec2(spawn.x / PPM, spawn.y / PPM), target.aimAngle + Math.PI / 2);
-                targetBody.setLinearVelocity(pl.Vec2(0, 0)); targetBody.setAngularVelocity(0);
+                const v = targetBody.getLinearVelocity();
+                targetBody.setLinearVelocity(pl.Vec2(v.x + fx * (hasKnife ? 1.9 : 1.7), v.y + fy * (hasKnife ? 1.9 : 1.7)));
               }
-              addParticles(state, ctx, deadX, deadY, 'car', 8);
+              if (target.health <= 0) {
+                const deadX = target.x, deadY = target.y;
+                target.deathX = deadX; target.deathY = deadY; target.deathSeq++;
+                p.score += 20;
+                const spawn = openSpawn(ctx, state, meleeHit.playerId);
+                target.x = spawn.x; target.y = spawn.y; target.prevX = spawn.x; target.prevY = spawn.y;
+                target.health = 100; target.invulnerable = 55; target.score = Math.max(0, target.score - 15);
+                if (targetBody) {
+                  targetBody.setTransform(pl.Vec2(spawn.x / PPM, spawn.y / PPM), target.aimAngle + Math.PI / 2);
+                  targetBody.setLinearVelocity(pl.Vec2(0, 0)); targetBody.setAngularVelocity(0);
+                }
+                addParticles(state, ctx, deadX, deadY, 'car', 8);
+              }
             }
           }
-          break;
+          // A tree trunk stops a melee trace but isn't damageable in this version.
         }
       }
       // Process discrete shot requests from the input queue. Each token is resolved at most once.
@@ -935,16 +1011,18 @@ export default defineSim({
       // time-of-impact, not by category/list order. Previously a distant prop in the props array
       // could absorb a bullet before a nearer player, or a wall farther down the ray could prevent
       // damage to a target standing in front of it.
-      type Hit = { t: number; kind: 'wall' | 'tree' | 'prop' | 'player'; prop?: Prop; playerId?: string };
+      type Hit = { t: number; kind: 'building' | 'tree' | 'prop' | 'player'; prop?: Prop; playerId?: string; buildingIndex?: number };
       let hit: Hit | null = null;
-      const consider = (t: number | null, kind: Hit['kind'], prop?: Prop, playerId?: string) => {
+      const consider = (t: number | null, kind: Hit['kind'], prop?: Prop, playerId?: string, buildingIndex?: number) => {
         if (t == null || !Number.isFinite(t)) return;
-        if (!hit || t < hit.t - 1e-7) hit = { t, kind, prop, playerId };
+        if (!hit || t < hit.t - 1e-7) hit = { t, kind, prop, playerId, buildingIndex };
       };
-      for (const building of BUILDINGS) {
+      for (let buildingIndex = 0; buildingIndex < BUILDINGS.length; buildingIndex++) {
+        if (state.buildings[buildingIndex]?.active === false) continue;
+        const building = BUILDINGS[buildingIndex];
         consider(segmentEntryAabb(x0, y0, x1, y1,
           building.x - BULLET_RADIUS, building.y - BULLET_RADIUS,
-          building.x + building.w + BULLET_RADIUS, building.y + building.h + BULLET_RADIUS), 'wall');
+          building.x + building.w + BULLET_RADIUS, building.y + building.h + BULLET_RADIUS), 'building', undefined, undefined, buildingIndex);
       }
       for (const tree of TREES) {
         consider(segmentEntryCircle(x0, y0, x1, y1, tree.x, tree.y, tree.r + BULLET_RADIUS), 'tree');
@@ -979,13 +1057,17 @@ export default defineSim({
           ? `player:${hit.playerId || 'unknown'}`
           : hit.kind === 'prop' && hit.prop
             ? `prop:${hit.prop.kind}#${hit.prop.id}`
-            : hit.kind;
+            : hit.kind === 'building' && typeof hit.buildingIndex === 'number'
+              ? `building:${hit.buildingIndex}`
+              : hit.kind;
         recordShotTrace(state, ctx, {
           kind: 'hit', owner: b.owner, token: b.shotToken, weaponId: b.weaponId, pelletIndex: b.pelletIndex,
           x: b.x, y: b.y, target: impactTarget, detail: 'first collision; projectile stopped',
         });
         if (hit.kind === 'prop' && hit.prop) {
           damageProp(state, ctx, hit.prop, b.damage, state.players[b.owner] || null);
+        } else if (hit.kind === 'building' && typeof hit.buildingIndex === 'number') {
+          damageBuilding(state, ctx, hit.buildingIndex, b.damage, state.players[b.owner] || null);
         } else if (hit.kind === 'player' && hit.playerId) {
           const target = state.players[hit.playerId];
           if (target && target.invulnerable <= 0) {

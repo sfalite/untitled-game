@@ -30,7 +30,7 @@ The simulation keeps only the newest 32 `shotTrace` events. Each entry includes 
 - A pending shot's original input frame is not used as its eventual world-space origin. If cooldown delays acceptance, the next accepted projectile starts from the current authoritative player x/y and aim. Only one pending shot per player is retained; newer requests supersede older pending requests to avoid a delayed backlog.
 - Local muzzle flash is a world-space effect keyed by owner/token. On authoritative spawn, an existing local flash is reconciled rather than spawning a second one. Remote muzzle flashes use the authoritative spawn position and angle.
 - F4 no longer paints a second filled marker at each bullet position; the standard bullet renderer is the single visual projectile source.
-- `sim.ts` internal rule version is `29`; bump it on future rule changes.
+- `sim.ts` internal rule version is `31`; bump it on future rule changes.
 
 
 ## Projectile render timelines (Update v31 baseline; historical)
