@@ -23,7 +23,7 @@ const WEAPON_NAMES = ['GLOCK-17', 'AK-47', 'M249', 'M134 MINIGUN', 'SHOTGUN', 'K
 const WEAPON_COLORS = ['#ffe07a', '#ffd16a', '#ffb347', '#ff8f53', '#fff0b0', '#d5e4ed'];
 // Exact local muzzle points in the same orientation as drawWeaponLocal/drawWeaponShape.
 // Keep in sync with sim.ts so a rendered barrel and its authoritative shot share an origin.
-const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 24, 25];
+const WEAPON_MUZZLE_FORWARD = [47, 45, 46, 44, 45];
 const WEAPON_MUZZLE_SIDE = 8;
 // Match the simulation's 20 Hz cooldowns locally. In the v32 world-prediction experiment,
 // player poses and every projectile are rendered from the same SDK-predicted world state.
@@ -710,9 +710,10 @@ function drawWeaponPickup(ctx: CanvasRenderingContext2D, pickup: any): void {
   ctx.restore();
 }
 function drawWeaponLocal(ctx: CanvasRenderingContext2D, weapon: number, scale = 1): void {
-  // Move the Glock farther forward along the sprite's local muzzle-up axis. The weapon,
-  // muzzle flash and authoritative projectile origin use the same longer forward offset.
-  ctx.save(); ctx.translate(8, weapon === 0 ? -9 : weapon === 5 ? 1 : 4); ctx.scale(scale, scale);
+  // Move every held item 20 additional pixels forward along the sprite's local muzzle-up axis.
+  // The client muzzle points below are kept in sync with sim.ts so bullets still leave the barrel.
+  // Item IDs: Glock=0, AK=1, M249=2, M134=3, Shotgun=4, Knife=5.
+  ctx.save(); ctx.translate(8, weapon === 0 ? -29 : weapon === 5 ? -19 : -16); ctx.scale(scale, scale);
   drawWeaponShape(ctx, weapon);
   ctx.restore();
 }
