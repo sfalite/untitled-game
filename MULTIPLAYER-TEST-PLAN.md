@@ -48,3 +48,12 @@ The F3 panel reads values exposed by the SDK. Some fields may show `--` if unava
 - [ ] Fire while moving and rotating; compare F4 muzzle markers with F3 spawn coordinates.
 - [ ] Enable F4 and verify player/building/tree/prop hitbox overlays correspond to the collision geometry.
 - [ ] Confirm the trace ring remains bounded to 32 events during automatic fire and does not grow without limit.
+
+
+## Update v31 regression cases
+| Scenario | Expected result | Inspect in F3/F4 |
+|---|---|---|
+| Move while a shot waits on weapon cooldown | Projectile starts from current authoritative player pose, not the earlier location | `request` then `spawn` world coordinates |
+| Turn cursor immediately after firing | Muzzle flash stays at the origin/angle of that shot instead of following the new cursor | Local and remote spawn trace x/y/angle |
+| Enable F4 and fire | Only one visual bullet remains; F4 overlays hitboxes but no duplicate bullet dot | Compare standard bullet glyph with diagnostics |
+| Fire fast with two players | No stale queued burst; superseded requests are explicitly rejected | Request/spawn/rejected trace tokens |

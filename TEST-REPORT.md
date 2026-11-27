@@ -1,19 +1,19 @@
-# Update v26 — Tiled map exporter validation report
+# Chaos City.io Update v31 — weapon alignment report
+
+## Root cause addressed
+The renderer had mixed timelines: the player sprite used the SDK's local predicted world via `mergeSelf`, but all projectile sprites were rendered from the interpolated room `state`. Under input lead and latency, the confirmed/interpolated local bullet could be behind the predicted character and weapon, appearing to leave from the wrong place.
 
 ## Changes
-- Added owner-gated F3 button: shown only for the local username `free2win`.
-- Added an exported Tiled JSON map with 42×42 cells, 64×64 tiles, floor layers, building/prop/tree data, and hidden collision layers.
-- Portable export ZIP includes the TMJ, source tilesheet, tree sprite, and rendered transparent `walls.png` and `props.png` art layers.
-- Added project-preview save via `project.saveFile('maps/chaos-city-export.tmj', ...)` and `previewWritable: ["maps"]`.
-- Added fixed map-home positions (`mapX`, `mapY`) to props so map exports use the original placed layout instead of any live physics displacement.
-- Incremented simulation version from `27` to `28`; no weapon, damage, input, prediction, or physics behavior was changed for the exporter.
+- With `predict: 'self'`, render local-owned bullets exclusively from `self.bullets`; render remote-owned bullets exclusively from the interpolated room `state.bullets`. The lists are partitioned by owner and each is deduplicated by `shotKey` + pellet index. If the SDK doesn't expose `self.bullets` as an array, a compatibility fallback uses room bullets.
+- Keep `PendingShot` free of stale world coordinates. Position and aim are sampled from the simulation frame where the request is accepted; the matching predicted local world applies the same rule. This avoids firing from an old position cached while waiting for cooldown.
+- Keep the local predicted muzzle flash at its captured world-space origin when the authoritative trace arrives; don't move that flash to the delayed room pose.
+- Preserve authoritative collision and damage logic; there is no custom second bullet simulation and no change to network prediction mode.
 
-## Checks
-- TypeScript compilation passed using local temporary declarations for SDK imports.
-- Exported ZIP writer test passed using Python `zipfile.testzip()` and successfully extracted both test entries.
-- Tiled structure test validates 42×42 map dimensions, 1,764 cells per tile layer, valid GID ranges, unique object IDs, and object layers for buildings, tree trunk colliders and props.
-- Asset references are relative to the map root and included in the portable archive.
+## Local checks
+- TypeScript syntax check with temporary ambient declarations for the SDK modules.
+- Static invariants: local bullets are sourced from `self`, remote bullets from `state`, owner filtering prevents overlap, the authoritative muzzle position remains the accepted-frame pose, request aim is snapshotted, and local flashes are not moved on confirmation.
+- Muzzle-offset transform comparisons for all five weapons at multiple aim angles.
+- ZIP integrity.
 
 ## Not run
-- `npx moddio test` was not run here.
-- The UI button and project save/download behavior were not exercised inside the live modd.io sandbox. Published-game iframes may restrict downloads; use the editable owner preview for the SDK project-save path if needed.
+- `npx moddio test`, `npx moddio play`, and live two-player modd.io validation were not run in this environment. Validate them in the actual project before publishing.

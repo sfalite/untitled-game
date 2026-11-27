@@ -24,7 +24,8 @@ interface WeaponRule {
   pellets: number;
   color: string;
 }
-// Weapon IDs are stable item types, not inventory slot numbers:
+// Shot creation is authoritative and snapshots the accepted frame's pose; never carry stale
+// world coordinates across cooldown waits. Weapon IDs are stable item types, not inventory slot numbers:
 // 0 Glock-17, 1 AK-47, 2 M249, 3 M134 Minigun, 4 Shotgun.
 const WEAPONS: WeaponRule[] = [
   { damage: 16, cooldown: 8, speed: 18, life: 34, spread: 0.035, pellets: 1, color: '#ffe07a' },
@@ -151,7 +152,7 @@ const TREES: Tree[] = [
 
 type PropKind = 'crate' | 'bin' | 'hydrant' | 'cone' | 'bench' | 'car';
 type Prop = { id: number; x: number; y: number; mapX: number; mapY: number; prevX: number; prevY: number; prevAngle: number; kind: PropKind; variant: number; active: boolean; respawnAt: number; body: number; angle: number; health: number };
-type PendingShot = { token: number; shotKey: string; aimAngle: number; weaponId: number; slot: number; x: number; y: number; receivedFrame: number };
+type PendingShot = { token: number; shotKey: string; weaponId: number; slot: number; queuedFrame: number };
 type Player = {
   name: string; x: number; y: number; prevX: number; prevY: number; body: number; move: [number, number]; aimAngle: number;
   /** Selected inventory slot (0-4). Actual weapon IDs live in inventory. */
@@ -170,7 +171,7 @@ type Particle = { id: number; body: number; x: number; y: number; life: number; 
 type ShotTraceKind = 'request' | 'spawn' | 'hit' | 'expired' | 'rejected';
 type ShotTraceEvent = {
   id: number; frame: number; kind: ShotTraceKind; owner: string; token: number; weaponId: number;
-  pelletIndex: number; x: number; y: number; target: string; detail: string;
+  pelletIndex: number; x: number; y: number; target: string; detail: string; angle?: number;
 };
 type State = {
   players: Record<string, Player>; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[];
@@ -545,7 +546,7 @@ function recordShotTrace(
 
 export default defineSim({
   name: 'chaos-city',
-  version: '28',
+  version: '29',
   tickRate: 20,
   maxPlayers: 32,
   // Predict only the local player. The SDK interpolates remote players from authoritative
@@ -553,7 +554,7 @@ export default defineSim({
   // are corrected after rollback. Bullets stay authoritative and are never reattached to a muzzle.
   predict: 'self',
   physics: box2dPhysics,
-  input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', shotToken: 'u32', shotAim: 'u16', shotWeapon: 'u8', buttons: { flags: ['fire', 'smash', 'pickup', 'drop'] } },
+  input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', shotToken: 'u32', shotWeapon: 'u8', buttons: { flags: ['fire', 'smash', 'pickup', 'drop'] } },
 
   fingerprint(state, id, { physics }) {
     const player = state.players[id];
@@ -622,8 +623,16 @@ export default defineSim({
       // If multiple input changes were coalesced, keep only the latest request rather than
       // replaying a stale burst long after the player released the trigger.
       if (delta > 1) {
-        // Inputs can be coalesced under latency. Only the newest request is kept; do not replay
-        // skipped clicks later from a stale position. Record the coalescing for F3 diagnostics.
+        // Inputs can be coalesced under latency. Explicitly reject queued older requests so their
+        // local muzzle flashes can be retired and stale shots cannot fire much later.
+        for (const dropped of p.pendingShots) {
+          p.lastResolvedClientShotToken = dropped.token;
+          p.lastResolvedClientShotKey = dropped.shotKey;
+          recordShotTrace(state, ctx, {
+            kind: 'rejected', owner: id, token: dropped.token, weaponId: dropped.weaponId,
+            pelletIndex: -1, x: p.x, y: p.y, target: '', detail: 'superseded by coalesced input',
+          });
+        }
         p.pendingShots = [];
         p.lastResolvedClientShotToken = (nextToken - 1) >>> 0;
         p.lastResolvedClientShotKey = `${id}:${p.lastResolvedClientShotToken}`;
@@ -632,34 +641,29 @@ export default defineSim({
           pelletIndex: -1, x: p.x, y: p.y, target: '', detail: `coalesced ${delta - 1} token(s)`,
         });
       }
+      // Keep at most one shot waiting for cooldown. A backlog of old requests made shots appear
+      // from positions the shooter left several frames earlier. The newest intent wins instead.
+      for (const dropped of p.pendingShots) {
+        p.lastResolvedClientShotToken = dropped.token;
+        p.lastResolvedClientShotKey = dropped.shotKey;
+        recordShotTrace(state, ctx, {
+          kind: 'rejected', owner: id, token: dropped.token, weaponId: dropped.weaponId,
+          pelletIndex: -1, x: p.x, y: p.y, target: '', detail: 'superseded by newer shot input',
+        });
+      }
+      p.pendingShots = [];
       const request: PendingShot = {
         token: nextToken,
         shotKey: `${id}:${nextToken}`,
-        aimAngle: unwrapAngleNear(p.aimAngle, (Number(input.shotAim) / 65535) * Math.PI * 2),
         weaponId: Number(input.shotWeapon) | 0,
         slot: p.weapon,
-        // Snapshot the last authoritative player position when the input arrives. If a queued
-        // shot waits for cooldown, it must not suddenly fire from the player's later location.
-        x: p.x, y: p.y, receivedFrame: Number(ctx?.frame) || 0,
+        queuedFrame: Number(ctx?.frame) || 0,
       };
       p.pendingShots.push(request);
       recordShotTrace(state, ctx, {
         kind: 'request', owner: id, token: request.token, weaponId: request.weaponId,
-        pelletIndex: -1, x: request.x, y: request.y, target: '', detail: `slot ${request.slot}; queued`,
+        pelletIndex: -1, x: p.x, y: p.y, target: '', detail: `slot ${request.slot}; queued`,
       });
-      // Bound queued shots under a lag spike; discarded requests are resolved so local
-      // provisional tracers cannot remain as ghosts if they never existed authoritatively.
-      while (p.pendingShots.length > 4) {
-        const dropped = p.pendingShots.shift();
-        if (dropped) {
-          p.lastResolvedClientShotToken = dropped.token;
-          p.lastResolvedClientShotKey = dropped.shotKey;
-          recordShotTrace(state, ctx, {
-            kind: 'rejected', owner: id, token: dropped.token, weaponId: dropped.weaponId,
-            pelletIndex: -1, x: dropped.x, y: dropped.y, target: '', detail: 'queue overflow',
-          });
-        }
-      }
     }
     p.clientShotToken = nextToken;
     p.fire = !!input.buttons.fire;
@@ -813,9 +817,10 @@ export default defineSim({
           break;
         }
       }
-      // Process discrete shot requests from the input queue. Each token is resolved at most
-      // once, and carries the weapon/slot/aim snapshot from the input that requested it.
-      // This is independent of p.fire, which may already be false by the time a fast click lands.
+      // Process discrete shot requests from the input queue. Each token is resolved at most once.
+      // Weapon/slot identity comes from the request, while muzzle position and aim are sampled from
+      // the current authoritative player pose when the request is accepted. This avoids stale shots
+      // originating at positions the player left while a cooldown was still active.
       while (p.pendingShots.length > 0) {
         const pending = p.pendingShots[0];
         const weaponValid = Number.isInteger(pending.weaponId)
@@ -829,18 +834,34 @@ export default defineSim({
           p.lastResolvedClientShotKey = pending.shotKey;
           recordShotTrace(state, ctx, {
             kind: 'rejected', owner: id, token: pending.token, weaponId: pending.weaponId,
-            pelletIndex: -1, x: pending.x, y: pending.y, target: '', detail: weaponValid ? 'slot changed before fire' : 'invalid weapon id',
+            pelletIndex: -1, x: p.x, y: p.y, target: '', detail: weaponValid ? 'slot changed before fire' : 'invalid weapon id',
           });
           continue;
         }
-        if (p.fireCooldowns[pending.weaponId] > 0) break;
+        if (p.fireCooldowns[pending.weaponId] > 0) {
+          // Wait only through the ordinary cooldown window. The request has no stored world
+          // position: when it is accepted, its muzzle is calculated from the current authoritative
+          // player pose and current aim, never from a stale snapshot captured before movement.
+          const maxWait = WEAPONS[pending.weaponId].cooldown + 2;
+          if (ctx.frame - pending.queuedFrame > maxWait) {
+            p.pendingShots.shift();
+            p.lastResolvedClientShotToken = pending.token;
+            p.lastResolvedClientShotKey = pending.shotKey;
+            recordShotTrace(state, ctx, {
+              kind: 'rejected', owner: id, token: pending.token, weaponId: pending.weaponId,
+              pelletIndex: -1, x: p.x, y: p.y, target: '', detail: 'cooldown timeout; stale shot discarded',
+            });
+            continue;
+          }
+          break;
+        }
         if (state.bullets.length >= 350) {
           p.pendingShots.shift();
           p.lastResolvedClientShotToken = pending.token;
           p.lastResolvedClientShotKey = pending.shotKey;
           recordShotTrace(state, ctx, {
             kind: 'rejected', owner: id, token: pending.token, weaponId: pending.weaponId,
-            pelletIndex: -1, x: pending.x, y: pending.y, target: '', detail: 'projectile capacity reached',
+            pelletIndex: -1, x: p.x, y: p.y, target: '', detail: 'projectile capacity reached',
           });
           break;
         }
@@ -850,10 +871,10 @@ export default defineSim({
         p.lastResolvedClientShotKey = pending.shotKey;
         const weaponId = pending.weaponId;
         const weapon = WEAPONS[weaponId];
-        const shotAngle = Number.isFinite(pending.aimAngle) ? pending.aimAngle : p.aimAngle;
-        const sameFrameInput = Number(ctx.frame) === pending.receivedFrame;
-        const shotPlayer = { x: sameFrameInput ? p.x : pending.x, y: sameFrameInput ? p.y : pending.y, aimAngle: shotAngle };
-        const muzzle = muzzlePosition(shotPlayer, weaponId);
+        // Position and aim come from the same accepted simulation frame. The local client draws its
+        // bullet from the SDK's matching predicted self-world, not from the delayed room snapshot.
+        const shotAngle = p.aimAngle;
+        const muzzle = muzzlePosition({ x: p.x, y: p.y, aimAngle: shotAngle }, weaponId);
         p.fireCooldowns[weaponId] = weapon.cooldown;
         p.muzzleFlash = 2;
         p.shotWeapon = weaponId;
@@ -877,7 +898,7 @@ export default defineSim({
           });
           recordShotTrace(state, ctx, {
             kind: 'spawn', owner: id, token: pending.token, weaponId, pelletIndex: pellet,
-            x: muzzle.x, y: muzzle.y, target: '', detail: `bullet #${state.nextBulletId - 1}`,
+            x: muzzle.x, y: muzzle.y, target: '', detail: `bullet #${state.nextBulletId - 1}`, angle: shotAngle,
           });
         }
         // A single request is processed per player per frame. The remaining queue waits for that

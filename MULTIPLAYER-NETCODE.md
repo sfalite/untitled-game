@@ -24,3 +24,14 @@ This note maps the requested multiplayer techniques to the modd.io SDK integrati
 
 ## Shot lifecycle diagnostics (Update v23)
 The simulation keeps only the newest 32 `shotTrace` events. Each entry includes the authoritative frame, owner, token, weapon, pellet index, world position, and outcome. The log is ordinary deterministic state, so it follows rollback and does not use clocks, network calls, or random values. F3 displays the latest three events. F4 draws the existing hitbox geometry for visual inspection. These tools observe the current implementation; they do not create a second projectile or collision system.
+
+
+## Update v31 — weapon visual consistency
+- A pending shot's original input frame is not used as its eventual world-space origin. If cooldown delays acceptance, the next accepted projectile starts from the current authoritative player x/y and aim. Only one pending shot per player is retained; newer requests supersede older pending requests to avoid a delayed backlog.
+- Local muzzle flash is a world-space effect keyed by owner/token. On authoritative spawn, an existing local flash is reconciled rather than spawning a second one. Remote muzzle flashes use the authoritative spawn position and angle.
+- F4 no longer paints a second filled marker at each bullet position; the standard bullet renderer is the single visual projectile source.
+- `sim.ts` internal rule version is `29`; bump it on future rule changes.
+
+
+## Projectile render timelines (Update v31)
+In `predict: 'self'`, the local player's sprite is rendered from the SDK's `self` predicted world. Local-owned bullets must therefore come from `self.bullets` as well. Remote-owned bullets must come from the interpolated room `state.bullets`. Do not render both copies of the same local shot and do not match them by proximity. Use `shotKey` plus pellet index for diagnostic identity. The room remains authoritative for the real origin, collision, and damage.
