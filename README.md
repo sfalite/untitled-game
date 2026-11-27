@@ -38,3 +38,11 @@ PixiJS is pinned to `8.23.0` in `npm/package.json`. The SDK normally manages its
 ## PixiJS A/B renderer visibility (v28)
 
 Press N during a match. The on-screen badge directly reports `CANVAS2D BASELINE`, `PIXIJS INITIALIZING`, `PIXIJS WEBGL ACTIVE`, or a failure state. When PixiJS is active, building edges are temporarily outlined in cyan to make the mode easy to identify. Press N again to return to the baseline renderer. F3 shows the detailed renderer status and any captured Pixi initialization error.
+
+### PixiJS render test
+
+During a match, use the visible **ENABLE PIXIJS TEST** button below the top-left HUD, or press N/F6. The button changes to a cyan active state when PixiJS is rendering, and the map gets cyan outlines/wash as an intentional A/B marker. If PixiJS cannot initialize, the button turns red and F3 contains the error. The underlying game still uses the existing Canvas2D for dynamic entities and the modd.io SDK for multiplayer.
+
+## PixiJS toggle visibility (v29)
+
+During an active match, use the large **ENABLE PIXIJS TEST** button below the top-left HUD, or press N/F6. A cyan active button plus cyan building outlines/map tint confirms PixiJS mode. Click the button or press N/F6 again to return to Canvas2D. If the renderer fails, the button turns red and F3 reports the captured error. If the button never appears, confirm the updated `client/index.html` and `client/main.ts` are the files in the active modd.io draft/version and the game has been rebuilt/published.
