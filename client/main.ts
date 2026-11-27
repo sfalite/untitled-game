@@ -209,12 +209,13 @@ async function loadWaterSprite(): Promise<HTMLImageElement> {
   return embedded;
 }
 
-const [atlas, playerSprite, treeSprite, waterSprite, benchSprite] = await Promise.all([
+const [atlas, playerSprite, treeSprite, waterSprite, benchSprite, npcSprite] = await Promise.all([
   loadImage('assets/tilesheet_complete.png'),
   loadImage('assets/player.png'),
   loadImage('assets/trees/tree.png'),
   loadWaterSprite(),
   loadImage('assets/bench.png'),
+  loadImage('assets/npcs/man-blue-stand.png'),
 ]);
 
 // Locally bundled sound effects. The local player gets immediate one-shot audio on a predicted
@@ -639,6 +640,34 @@ function drawProp(ctx: CanvasRenderingContext2D, p: any): void {
     roundRect(ctx, p.x - barW / 2 + 1, barY + 1, Math.max(0, (barW - 2) * hp / maxHp), 3, 1.5);
   }
 }
+function drawStreetNpcs(ctx: CanvasRenderingContext2D, npcs: any[], visible: { x: number; y: number; w: number; h: number }): void {
+  if (!Array.isArray(npcs) || npcs.length === 0) return;
+  for (const npc of npcs) {
+    if (!Number.isFinite(npc.x) || !Number.isFinite(npc.y)) continue;
+    if (npc.x < visible.x - 32 || npc.y < visible.y - 32 || npc.x > visible.x + visible.w + 32 || npc.y > visible.y + visible.h + 32) continue;
+    const bob = Math.sin(Number(npc.walkPhase) || 0) * 0.9;
+    ctx.save();
+    ctx.translate(npc.x, npc.y + bob);
+    ctx.fillStyle = 'rgba(20,30,35,.20)';
+    ctx.beginPath(); ctx.ellipse(0, 11, 13, 6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.rotate((Number(npc.angle) || 0) + Math.PI / 2);
+    if (imageReady(npcSprite)) {
+      const oldSmoothing = ctx.imageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(npcSprite, -21.5, -16.5, 43, 33);
+      ctx.imageSmoothingEnabled = oldSmoothing;
+    } else {
+      ctx.fillStyle = '#1684ed'; roundRect(ctx, -8, -7, 16, 16, 4);
+      ctx.fillStyle = '#e6b389'; ctx.beginPath(); ctx.arc(0, -10, 5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    // 100 HP is replicated with the NPC; keep a tiny full health bar without cluttering the street.
+    const hp = Math.max(0, Math.min(100, Number(npc.health) || 0));
+    ctx.fillStyle = 'rgba(10,20,24,.78)'; roundRect(ctx, npc.x - 13, npc.y - 23, 26, 4, 2);
+    ctx.fillStyle = '#37df83'; roundRect(ctx, npc.x - 12, npc.y - 22, 24 * hp / 100, 2, 1);
+  }
+}
+
 function drawWeaponShape(ctx: CanvasRenderingContext2D, weapon: number): void {
   // Every weapon is authored muzzle-up in local coordinates. The player renderer rotates
   // both the equipped item and its grip offset as one transform.
@@ -1088,6 +1117,7 @@ function drawGame(state: any, self: any, playerId: string): void {
     ctx.save(); ctx.globalAlpha = alpha; ctx.translate(p.x, p.y); ctx.rotate(p.rotation || 0);
     ctx.fillStyle = p.color; ctx.fillRect(-p.size / 2, -p.size / 2, p.size, Math.max(2, p.size * 0.7)); ctx.restore();
   }
+  drawStreetNpcs(ctx, s.npcs || [], visible);
   for (const [id, p] of Object.entries(s.players) as [string, any][]) {
     // Keep the simulation's world prediction and projectile coordinates unchanged. Only soften
     // unusually large visual corrections for remote avatars; their weapon stays attached to the
@@ -1444,6 +1474,7 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   lines.push(`LOCAL (${Math.round(mine.x)}, ${Math.round(mine.y)}) · aim ${Math.round(aimDegrees)}° · HP ${Math.round(mine.health ?? 0)}`);
   lines.push(`DRIFT predicted-confirmed ${netDiagnostics.localDriftPx == null ? '--' : netDiagnostics.localDriftPx.toFixed(1) + ' px'} · players ${Object.keys(state.players || {}).length}`);
   lines.push(`ENTITIES bullets ${(state.bullets || []).length} · pickups ${(state.pickups || []).length} · particles ${(state.particles || []).length} · props ${(state.props || []).filter((p: any) => p.active).length}`);
+  lines.push(`NPCS ${(state.npcs || []).filter((npc: any) => Number(npc.health) > 0).length} passive street walkers · 100 HP`);
   const liveBuildings = (state.buildings || []).filter((b: any) => b.active).length;
   const damagedBuildings = (state.buildings || []).filter((b: any) => b.active && Number(b.health) < 1000).length;
   lines.push(`BUILDINGS ${liveBuildings}/${BUILDINGS.length} active · ${damagedBuildings} damaged · HP 1000 · respawn 5m`);
