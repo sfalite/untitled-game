@@ -209,11 +209,12 @@ async function loadWaterSprite(): Promise<HTMLImageElement> {
   return embedded;
 }
 
-const [atlas, playerSprite, treeSprite, waterSprite] = await Promise.all([
+const [atlas, playerSprite, treeSprite, waterSprite, benchSprite] = await Promise.all([
   loadImage('assets/tilesheet_complete.png'),
   loadImage('assets/player.png'),
   loadImage('assets/trees/tree.png'),
   loadWaterSprite(),
+  loadImage('assets/bench.png'),
 ]);
 
 // Locally bundled sound effects. The local player gets immediate one-shot audio on a predicted
@@ -614,7 +615,14 @@ function drawProp(ctx: CanvasRenderingContext2D, p: any): void {
   } else if (p.kind === 'cone') {
     ctx.fillStyle = '#e56c22'; ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(13, 13); ctx.lineTo(-13, 13); ctx.closePath(); ctx.fill();
     ctx.fillStyle = '#ffe1a3'; ctx.fillRect(-8, 3, 16, 4); ctx.fillStyle = '#bd4d1f'; ctx.fillRect(-15, 12, 30, 4);
+  } else if (p.kind === 'bench' && imageReady(benchSprite)) {
+    // Improved bundled top-down bench sprite. Pixel smoothing stays off so its edges remain crisp.
+    const oldSmoothing = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(benchSprite, -22, -13, 44, 26);
+    ctx.imageSmoothingEnabled = oldSmoothing;
   } else {
+    // Safe visual fallback only if the local bench PNG failed to load.
     ctx.fillStyle = '#83532e'; ctx.fillRect(-17, -4, 34, 6);
     ctx.fillStyle = '#d3a16a'; ctx.fillRect(-15, -13, 30, 7);
     ctx.fillStyle = '#80502d'; ctx.fillRect(-12, 2, 4, 11); ctx.fillRect(8, 2, 4, 11);
@@ -913,7 +921,7 @@ function drawSynchronizedBullets(ctx: CanvasRenderingContext2D, bulletsInput: an
 
 function propHitbox(kind: string): { hx: number; hy: number } {
   if (kind === 'car') return { hx: 46, hy: 22 };
-  if (kind === 'bench') return { hx: 17, hy: 13 };
+  if (kind === 'bench') return { hx: 22, hy: 13 };
   if (kind === 'crate') return { hx: 25, hy: 25 };
   if (kind === 'hydrant') return { hx: 13, hy: 14.5 };
   if (kind === 'cone') return { hx: 15, hy: 16 };
@@ -1066,10 +1074,10 @@ function drawGame(state: any, self: any, playerId: string): void {
   } else {
     drawFloorLayer(ctx, camX, camY, visibleW, visibleH);
   }
-  drawWallsLayer(ctx, visible, s.buildings);
-  // Draw water after building geometry so walls cannot hide it. It remains beneath props,
-  // pickups, players and the foreground tree canopy, and never creates a physics collider.
+  // Water is the lowest world decal: draw it after the floor but BEFORE buildings, props,
+  // pickups, bullets, particles, players and the foreground tree canopy. It has no collider.
   drawWaterPuddles(ctx, s.waterPuddles || [], visible);
+  drawWallsLayer(ctx, visible, s.buildings);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
   // World-prediction experiment: state and self represent one predicted world, so draw one list.
