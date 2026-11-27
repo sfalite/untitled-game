@@ -78,3 +78,10 @@ Apply the files together so `sim.ts`, `client/main.ts`, and the supplied audio/i
 - The client loads `assets/water-puddle.png`; if the modd.io iframe cannot load that relative path, it falls back to the exact same PNG bytes embedded in the client. It no longer draws a homemade ellipse/shape substitute.
 - Hydrant puddles remain 150×150 pixels, have no collision body, and now expire after 2,400 simulation frames (120 seconds at 20 Hz).
 - F3 reports whether the supplied image came from the bundled file or embedded PNG fallback.
+
+## Update v38 — water z-order and improved bench asset
+- Water puddles are now rendered immediately after the floor and before the buildings, props, pickups, bullets, particles, players, muzzle effects, and foreground tree canopies. The puddle is a non-colliding decal, so players and objects draw over it.
+- Added `assets/bench.png`, a custom top-down pixel-art park-bench sprite, and updated the renderer and Tiled prop-image export to use it. The previous rectangle bench remains only as a local asset-load fallback.
+- Widened bench collision from 34×26 to 44×26 world pixels to match the new sprite footprint. Updated both the client-side Tiled export hitbox and authoritative Planck fixture dimensions together.
+- Bumped deterministic simulation version from 36 to 37 because the authoritative bench collider changed.
+- Added `tests/water-layer-and-bench.test.mjs` to guard water render order, local bench asset loading/use, and matched collider dimensions.

@@ -336,7 +336,7 @@ function makePlayerBody(world: any, x: number, y: number): number {
 function propPhysics(kind: PropKind): { hx:number;hy:number;density:number;friction:number;bounce:number } {
   // Half-extents match the rendered object's actual width/height in world pixels.
   if (kind === 'car') return {hx:46,hy:22,density:2.4,friction:0.82,bounce:0.03};         // 92x44; parked vehicles are not player-drivable
-  if (kind === 'bench') return {hx:17,hy:13,density:0.8,friction:0.9,bounce:0.02};         // 34x26
+  if (kind === 'bench') return {hx:22,hy:13,density:0.8,friction:0.9,bounce:0.02};         // 44x26, matches improved bench art
   if (kind === 'crate') return {hx:25,hy:25,density:1.25,friction:0.68,bounce:0.12};       // 50x50
   if (kind === 'hydrant') return {hx:13,hy:14.5,density:1.7,friction:0.62,bounce:0.08};   // 26x29
   if (kind === 'cone') return {hx:15,hy:16,density:0.32,friction:0.5,bounce:0.24};         // 30x32
@@ -602,7 +602,7 @@ function recordShotTrace(
 
 export default defineSim({
   name: 'chaos-city',
-  version: '36',
+  version: '37',
   tickRate: 20,
   maxPlayers: 32,
   // Keep world prediction enabled so player poses, weapons, bullets, and collisions share one
