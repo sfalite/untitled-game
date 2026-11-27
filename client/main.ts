@@ -1,5 +1,3 @@
-import { Application as PixiApplication, Container as PixiContainer, Graphics as PixiGraphics, Sprite as PixiSprite, Texture as PixiTexture } from 'pixi.js';
-
 import {
   atMenu,
   canvas2d,
@@ -13,54 +11,8 @@ import {
 } from '@moddio/client/browser';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
-const pixiToggleButton = document.getElementById('pixi-toggle') as HTMLButtonElement | null;
-// Acquire the visible overlay with alpha enabled so Pixi's static layer can show through when
-// The Pixi prototype is enabled. Canvas2D baseline mode still paints its opaque background each frame.
-canvas.getContext('2d', { alpha: true });
-// PixiJS is an optional renderer prototype. It lives on a separate, non-interactive canvas
-// beneath the existing Canvas2D input/HUD layer, so it cannot take over the modd.io controls.
-const pixiCanvas = document.createElement('canvas');
-pixiCanvas.id = 'pixi-world';
-pixiCanvas.style.position = 'fixed';
-pixiCanvas.style.inset = '0';
-pixiCanvas.style.width = '100vw';
-pixiCanvas.style.height = '100vh';
-pixiCanvas.style.pointerEvents = 'none';
-pixiCanvas.style.zIndex = '0';
-pixiCanvas.style.display = 'none';
-document.body.insertBefore(pixiCanvas, canvas);
-canvas.style.position = 'fixed';
-canvas.style.inset = '0';
-canvas.style.zIndex = '1';
-canvas.style.background = 'transparent';
 const view = canvas2d(canvas);
 const keys = controls(canvas, { buttons: [{ key: 'f', label: 'FIRE / PUNCH' }, { key: 'e', label: 'PICK UP' }, { key: 'g', label: 'DROP' }, { key: ' ', label: 'SMASH' }, { key: 'm', label: 'MENU' }] });
-let pixiApp: PixiApplication | null = null;
-let pixiWorldContainer: PixiContainer | null = null;
-let pixiAvailable = false;
-let pixiPrototypeEnabled = false;
-let pixiInitPromise: Promise<boolean> | null = null;
-let pixiStatus = 'CANVAS2D BASELINE';
-let pixiErrorMessage = '';
-let pixiNotice = '';
-let pixiNoticeUntil = 0;
-let pixiRendererWidth = 0;
-let pixiRendererHeight = 0;
-
-function syncPixiToggleButton(): void {
-  if (!pixiToggleButton) return;
-  const active = pixiPrototypeEnabled && pixiAvailable;
-  const failed = pixiStatus.includes('FAILED') || pixiStatus.includes('ERROR');
-  const initializing = pixiStatus.includes('INITIALIZING');
-  pixiToggleButton.classList.toggle('active', active);
-  pixiToggleButton.classList.toggle('error', failed);
-  pixiToggleButton.setAttribute('aria-pressed', active ? 'true' : 'false');
-  pixiToggleButton.textContent = active
-    ? 'PIXIJS WEBGL ACTIVE · CLICK TO SWITCH BACK'
-    : failed ? 'PIXIJS UNAVAILABLE · OPEN F3 FOR ERROR'
-    : initializing ? 'INITIALIZING PIXIJS…'
-    : 'ENABLE PIXIJS TEST · CLICK HERE';
-}
 
 const TILE = 64;
 const COLS = 42;
@@ -453,167 +405,6 @@ if (floorMapContext) {
   drawFloorLayer(floorMapContext, 0, 0, WORLD_W, WORLD_H);
 }
 
-function pixiHex(value: string): number {
-  const parsed = Number.parseInt(String(value || '').replace('#', ''), 16);
-  return Number.isFinite(parsed) ? parsed : 0x6c6153;
-}
-
-function buildPixiStaticWorld(): PixiContainer {
-  const root = new PixiContainer();
-  // Reuse the exact cached 2D floor artwork: the prototype changes its renderer, not map data.
-  const floorTexture = PixiTexture.from(floorMapCache);
-  try { (floorTexture.source as any).scaleMode = 'nearest'; } catch {}
-  const floorSprite = new PixiSprite(floorTexture);
-  floorSprite.x = 0; floorSprite.y = 0;
-  floorSprite.width = WORLD_W; floorSprite.height = WORLD_H;
-  root.addChild(floorSprite);
-
-  // Static buildings are represented by batched PixiJS Graphics. Their positions and dimensions
-  // use the existing BUILDINGS array that also feeds the Canvas renderer and map exporter.
-  const buildings = new PixiGraphics();
-  for (const b of BUILDINGS) {
-    buildings.roundRect(b.x + 8, b.y + 10, b.w, b.h, 10).fill({ color: 0x161f22, alpha: 0.24 });
-    buildings.roundRect(b.x, b.y, b.w, b.h, 9).fill({ color: 0x6c6153 });
-    buildings.roundRect(b.x + 5, b.y + 5, b.w - 10, b.h - 10, 7).fill({ color: pixiHex(b.color) });
-    buildings.roundRect(b.x + 10, b.y + 9, b.w - 20, 22, 5).fill({ color: 0xfff8da, alpha: 0.26 });
-    const windowCols = Math.max(2, Math.floor((b.w - 24) / 34));
-    for (let i = 0; i < windowCols; i++) {
-      const wx = b.x + 12 + i * ((b.w - 28) / windowCols);
-      for (let wy = b.y + 46; wy < b.y + b.h - 12; wy += 35) {
-        buildings.roundRect(wx, wy, 17, 19, 3).fill({ color: 0x1a2d30, alpha: 0.62 });
-      }
-    }
-    // Temporary, deliberate cyan edge makes the Pixi A/B mode visibly identifiable.
-    // This is a renderer-test highlight only; it does not change map/collision data.
-    buildings.roundRect(b.x - 1, b.y - 1, b.w + 2, b.h + 2, 10)
-      .stroke({ color: 0x45e6f2, alpha: 0.28, width: 8 });
-    buildings.roundRect(b.x + 2, b.y + 2, b.w - 4, b.h - 4, 8)
-      .stroke({ color: 0x45e6f2, alpha: 0.98, width: 3 });
-  }
-  root.addChild(buildings);
-  // Strong, temporary A/B marker: a subtle cyan wash across the road surface makes it obvious
-  // when Pixi is actually rendering, without changing physics, collision geometry, or gameplay.
-  const pixiModeWash = new PixiGraphics();
-  pixiModeWash.rect(0, 0, WORLD_W, WORLD_H).fill({ color: 0x00d8ff, alpha: 0.075 });
-  root.addChild(pixiModeWash);
-  return root;
-}
-
-async function ensurePixiRenderer(): Promise<boolean> {
-  if (pixiAvailable && pixiApp && pixiWorldContainer) return true;
-  if (pixiInitPromise) return pixiInitPromise;
-  pixiInitPromise = (async () => {
-    let initializingApp: PixiApplication | null = null;
-    try {
-      const app = new PixiApplication();
-      initializingApp = app;
-      await app.init({
-        canvas: pixiCanvas,
-        width: Math.max(1, view.width),
-        height: Math.max(1, view.height),
-        backgroundAlpha: 0,
-        clearBeforeRender: true,
-        autoStart: false,
-        antialias: false,
-        autoDensity: false,
-        resolution: 1,
-        preference: 'webgl',
-        powerPreference: 'high-performance',
-      });
-      app.stop();
-      const world = buildPixiStaticWorld();
-      app.stage.addChild(world);
-      pixiApp = app;
-      pixiWorldContainer = world;
-      pixiRendererWidth = Math.max(1, view.width);
-      pixiRendererHeight = Math.max(1, view.height);
-      pixiAvailable = true;
-      pixiStatus = 'PIXIJS STATIC WORLD READY';
-      pixiErrorMessage = '';
-      return true;
-    } catch (error) {
-      pixiCanvas.style.display = 'none';
-      pixiAvailable = false;
-      pixiPrototypeEnabled = false;
-      pixiStatus = 'PIXI INIT FAILED · CANVAS2D FALLBACK';
-      pixiErrorMessage = String((error as any)?.message || error || 'unknown initialization error').slice(0, 180);
-      pixiNotice = 'PixiJS failed; Canvas2D remains active · check F3';
-      pixiNoticeUntil = performance.now() + 4000;
-      try { (initializingApp as any)?.destroy({ removeView: false }, { children: true, texture: false, textureSource: false, context: true }); } catch {}
-      pixiApp = null;
-      pixiWorldContainer = null;
-      console.warn('Chaos City.io PixiJS prototype could not initialize; using Canvas2D.', error);
-      return false;
-    } finally {
-      pixiInitPromise = null;
-    }
-  })();
-  return pixiInitPromise;
-}
-
-async function togglePixiRendererPrototype(): Promise<void> {
-  if (pixiPrototypeEnabled) {
-    pixiPrototypeEnabled = false;
-    pixiCanvas.style.display = 'none';
-    pixiStatus = 'CANVAS2D BASELINE';
-    pixiNotice = 'Canvas2D baseline renderer';
-    pixiNoticeUntil = performance.now() + 2500;
-    syncPixiToggleButton();
-    return;
-  }
-  pixiStatus = 'INITIALIZING PIXIJS…';
-  syncPixiToggleButton();
-  pixiErrorMessage = '';
-  pixiNotice = 'Initializing PixiJS static-world prototype…';
-  pixiNoticeUntil = performance.now() + 3500;
-  const ready = await ensurePixiRenderer();
-  if (!ready) return;
-  pixiPrototypeEnabled = true;
-  pixiCanvas.style.display = 'block';
-  pixiStatus = 'PIXIJS STATIC WORLD + CANVAS2D ENTITIES';
-  pixiNotice = 'PixiJS static world enabled · N to switch back';
-  pixiNoticeUntil = performance.now() + 3000;
-  syncPixiToggleButton();
-}
-
-// The A/B renderer has a real DOM button in addition to the N/F6 shortcuts. This avoids
-// relying on the modd.io canvas keyboard sampler for a test-only toggle that can be missed.
-if (pixiToggleButton) {
-  pixiToggleButton.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    void togglePixiRendererPrototype().finally(syncPixiToggleButton);
-  });
-  syncPixiToggleButton();
-}
-
-function renderPixiStaticWorld(camX: number, camY: number, zoom: number): boolean {
-  if (!pixiPrototypeEnabled || !pixiApp || !pixiWorldContainer) return false;
-  try {
-    const width = Math.max(1, view.width), height = Math.max(1, view.height);
-    if (width !== pixiRendererWidth || height !== pixiRendererHeight) {
-      pixiApp.renderer.resize(width, height);
-      pixiRendererWidth = width;
-      pixiRendererHeight = height;
-    }
-    pixiWorldContainer.scale.set(zoom, zoom);
-    pixiWorldContainer.position.set(-camX * zoom, -camY * zoom);
-    pixiApp.render();
-    pixiCanvas.style.display = 'block';
-    return true;
-  } catch (error) {
-    console.warn('PixiJS render failed; returning to Canvas2D.', error);
-    pixiPrototypeEnabled = false;
-    pixiCanvas.style.display = 'none';
-    pixiStatus = 'PIXI RENDER ERROR · CANVAS2D FALLBACK';
-    pixiErrorMessage = String((error as any)?.message || error || 'unknown render error').slice(0, 180);
-    pixiNotice = 'PixiJS render failed; Canvas2D restored · check F3';
-    pixiNoticeUntil = performance.now() + 4000;
-    syncPixiToggleButton();
-    return false;
-  }
-}
-
 function drawWallsLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:number;w:number;h:number}): void {
   for (const b of BUILDINGS) {
     if (b.x + b.w < visible.x || b.x > visible.x + visible.w || b.y + b.h < visible.y || b.y > visible.y + visible.h) continue;
@@ -975,7 +766,6 @@ function seedLocalShotTokenBaseline(playerState: any): void {
 }
 
 function drawGame(state: any, self: any, playerId: string): void {
-  if (pixiToggleButton) { pixiToggleButton.style.display = 'block'; syncPixiToggleButton(); }
   const ctx = view.begin('#7eb47a');
   const s: any = mergeSelf(state, self, 'players', playerId);
   if (!s || !s.players || !s.players[playerId]) return;
@@ -1000,25 +790,14 @@ function drawGame(state: any, self: any, playerId: string): void {
   aimCameraReady = true;
   const visible = { x: camX, y: camY, w: visibleW, h: visibleH };
 
-  const usingPixiStaticWorld = renderPixiStaticWorld(camX, camY, zoom);
-  if (usingPixiStaticWorld) {
-    // Main Canvas2D layer stays transparent so Pixi owns only the static floor/buildings.
-    // Input, HUD, dynamic props, trees, players, bullets, particles and debug overlays remain here.
-    ctx.clearRect(0, 0, view.width, view.height);
-  } else {
-    pixiCanvas.style.display = 'none';
-  }
-
   ctx.save(); ctx.scale(zoom, zoom); ctx.translate(-camX, -camY);
   ctx.imageSmoothingEnabled = false;
-  if (!usingPixiStaticWorld) {
-    if (floorMapCache.width > 0 && floorMapContext) {
-      ctx.drawImage(floorMapCache, camX, camY, visibleW, visibleH, camX, camY, visibleW, visibleH);
-    } else {
-      drawFloorLayer(ctx, camX, camY, visibleW, visibleH);
-    }
-    drawWallsLayer(ctx, visible);
+  if (floorMapCache.width > 0 && floorMapContext) {
+    ctx.drawImage(floorMapCache, camX, camY, visibleW, visibleH, camX, camY, visibleW, visibleH);
+  } else {
+    drawFloorLayer(ctx, camX, camY, visibleW, visibleH);
   }
+  drawWallsLayer(ctx, visible);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
   // All visible projectiles use the same authoritative source on local and remote clients.
@@ -1283,24 +1062,6 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#ffffff'; ctx.font = w < 440 ? 'bold 12px system-ui' : 'bold 15px system-ui'; ctx.fillText(`Score  ${mine.score}`, 27, 60);
   ctx.fillStyle = '#c5d3d7'; ctx.font = '11px system-ui'; ctx.fillText(`${Object.keys(state.players || {}).length} PLAYER(S)`, 27, 77);
 
-  // Always-visible renderer badge makes it clear whether pressing N actually switched modes.
-  // Pixi mode has a cyan building-edge highlight as a temporary A/B test marker.
-  const pixiActive = pixiPrototypeEnabled && pixiAvailable;
-  const pixiFailed = pixiStatus.includes('FAILED') || pixiStatus.includes('ERROR');
-  const badgeText = pixiActive ? 'PIXIJS WEBGL ACTIVE · N TO SWITCH'
-    : pixiFailed ? 'PIXIJS UNAVAILABLE · F3 FOR DETAILS'
-    : pixiStatus.includes('INITIALIZING') ? 'PIXIJS INITIALIZING…'
-    : 'CANVAS2D BASELINE · N TO TEST PIXI';
-  const badgeW = Math.min(w - 28, 250);
-  ctx.fillStyle = pixiActive ? 'rgba(0,67,76,.96)' : pixiFailed ? 'rgba(95,35,35,.94)' : 'rgba(14,25,31,.78)';
-  roundRect(ctx, 14, 94, badgeW, 23, 7);
-  ctx.strokeStyle = pixiActive ? '#45e6f2' : pixiFailed ? '#ff8e80' : 'rgba(210,230,224,.28)';
-  ctx.lineWidth = pixiActive ? 2 : 1;
-  strokeRoundRect(ctx, 14.5, 94.5, badgeW - 1, 22, 7);
-  ctx.fillStyle = pixiActive ? '#e2fdff' : pixiFailed ? '#ffe8e5' : '#d7e2e5';
-  ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'left';
-  ctx.fillText(badgeText, 22, 109, badgeW - 16);
-
   // Five-slot inventory. Slot 5 is intentionally empty-handed and never renders a weapon.
   const gap = 6;
   const slotW = Math.min(70, (w - 36 - gap * 4) / 5);
@@ -1337,7 +1098,7 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
 
   if (!keys.touch) {
     ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 292, 24, 8);
-    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · F3 DIAG · F4 HITBOX · N PIXI TEST', 24, h - 22, 272);
+    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · EMPTY SLOT: PUNCH · F3 DIAG · F4 HITBOX', 24, h - 22, 272);
   }
   const nearestWorldPickup = (state.pickups || []).some((pickup: any) => {
     const dx = pickup.x - mine.x, dy = pickup.y - mine.y;
@@ -1364,15 +1125,6 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('PING / MS', metricsX + 9, 58);
   ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'right'; ctx.fillText(displayedPingMs == null ? '--' : String(displayedPingMs), metricsX + metricsW - 9, 58);
   drawMiniMap(ctx, mine);
-  if (pixiNotice && performance.now() < pixiNoticeUntil) {
-    const noticeW = Math.min(view.width - 24, 360);
-    const noticeX = (view.width - noticeW) / 2;
-    const noticeY = Math.max(12, view.height - (keys.touch ? 220 : 174));
-    ctx.fillStyle = 'rgba(8,18,23,.92)'; roundRect(ctx, noticeX, noticeY, noticeW, 28, 8);
-    ctx.strokeStyle = 'rgba(123,244,174,.62)'; ctx.lineWidth = 1; strokeRoundRect(ctx, noticeX + .5, noticeY + .5, noticeW - 1, 27, 8);
-    ctx.fillStyle = '#e8fff1'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText(pixiNotice, view.width / 2, noticeY + 18, noticeW - 14);
-  }
 }
 
 function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
@@ -1394,8 +1146,6 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   const resolvedToken = finiteMetric(mine.lastResolvedClientShotToken);
   const queued = Array.isArray(mine.pendingShots) ? mine.pendingShots.length : 0;
   const mismatch = netDiagnostics.desyncDisagreed;
-  lines.push(`RENDERER ${pixiStatus} · N / F6 TO TOGGLE PROTOTYPE`);
-  if (pixiErrorMessage) lines.push(`PIXI ERROR ${pixiErrorMessage}`);
   lines.push(`PREDICTION ${netDiagnostics.mode} · local player predicted, room authoritative`);
   lines.push(`RECONCILIATION SDK rollback/replay · self prediction`);
   lines.push(`REMOTE BUFFER SDK interpolation · no second custom buffer`);
@@ -1837,8 +1587,6 @@ function menuButton(ctx: CanvasRenderingContext2D, x:number,y:number,w:number,h:
   if (!disabled) addHit(x, y, w, h, action);
 }
 function drawMenu(): void {
-  pixiCanvas.style.display = 'none';
-  if (pixiToggleButton) pixiToggleButton.style.display = 'none';
   const ctx = view.begin('#0a151a');
   const w = view.width, h = view.height;
   menuHits = [];
@@ -2175,17 +1923,6 @@ if (await atMenu()) {
   try { await startWorker(); }
   catch (err: any) { stopAllWeaponAudio(); mode = 'menu'; menuError = `Unable to connect: ${String(err?.message || err)}`; await refreshRooms(); }
 }
-
-// Keyboard fallback for the A/B renderer. Ignore repeat events so holding N never toggles twice.
-window.addEventListener('keydown', (event: KeyboardEvent) => {
-  if (mode !== 'game' || event.repeat) return;
-  const key = event.key.toLowerCase();
-  if (key !== 'n' && key !== 'f6') return;
-  const target = event.target as HTMLElement | null;
-  if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
-  event.preventDefault();
-  void togglePixiRendererPrototype().finally(syncPixiToggleButton);
-}, { capture: true });
 
 function appLoop(): void {
   if (mode === 'menu') {
