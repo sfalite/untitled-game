@@ -44,7 +44,7 @@ const PUNCH_RANGE = 50;
 const PUNCH_COOLDOWN = 13;
 const BUILDING_MAX_HP = 1000;
 const BUILDING_RESPAWN_TICKS = 5 * 60 * 20; // Five minutes at 20 simulation ticks per second.
-const WATER_PUDDLE_LIFETIME_TICKS = 150 * 20; // 2 minutes 30 seconds at 20 ticks/s.
+const WATER_PUDDLE_LIFETIME_TICKS = 120 * 20; // 2 minutes at 20 ticks/s.
 
 // Planck keeps contact/broad-phase history, so rebuild its canonical world periodically.
 const box2dPhysics: any = planck({ gravity: { x: 0, y: 0 } });
@@ -527,7 +527,7 @@ function destroyProp(state: State, ctx: any, prop: Prop, player: Player | null):
   prop.body = -1;
   if (player) player.score += propPoints(prop.kind);
   addParticles(state, ctx, prop.x, prop.y, prop.kind, prop.kind === 'car' ? 18 : 11);
-  // A destroyed red hydrant leaves a large, non-colliding puddle for 150 seconds.
+  // A destroyed red hydrant leaves the supplied water sprite as a non-colliding puddle for 120 seconds.
   if (prop.kind === 'hydrant') addWaterPuddle(state, prop, ctx);
   // Brown crates have a deterministic chance to spill a collectible gun or knife.
   if (prop.kind === 'crate' && state.pickups.length < MAX_WEAPON_PICKUPS && ctx.rng() < WEAPON_DROP_CHANCE) {

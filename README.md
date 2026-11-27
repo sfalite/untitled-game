@@ -71,3 +71,10 @@ Apply the files together so `sim.ts`, `client/main.ts`, and the supplied audio/i
 - Improved hydrant-water reliability: immutable spawn coordinates, drawing after building geometry, and a visible blue fallback if `assets/water.png` fails to load. The puddle stays non-colliding and expires after 150 seconds.
 - Added a unified `meleeImpactEventKey` for impacts against destructible props, buildings, tree trunks, and players. `universfield-punch-140236.mp3` now plays on object hits too; `sharp-swing.mp3` remains the swing sound.
 - Bumped deterministic simulation version to 36.
+
+
+## Update v37 — use supplied water sprite and 120-second lifetime
+- Bundled the supplied `water(1).png` bytes as `assets/water-puddle.png` with a unique filename to avoid stale `water.png` asset caching.
+- The client loads `assets/water-puddle.png`; if the modd.io iframe cannot load that relative path, it falls back to the exact same PNG bytes embedded in the client. It no longer draws a homemade ellipse/shape substitute.
+- Hydrant puddles remain 150×150 pixels, have no collision body, and now expire after 2,400 simulation frames (120 seconds at 20 Hz).
+- F3 reports whether the supplied image came from the bundled file or embedded PNG fallback.
