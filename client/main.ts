@@ -189,10 +189,11 @@ function loadImage(src: string): Promise<HTMLImageElement> {
     img.src = src;
   });
 }
-const [atlas, playerSprite, treeSprite] = await Promise.all([
+const [atlas, playerSprite, treeSprite, waterSprite] = await Promise.all([
   loadImage('assets/tilesheet_complete.png'),
   loadImage('assets/player.png'),
   loadImage('assets/trees/tree.png'),
+  loadImage('assets/water.png'),
 ]);
 
 // Locally bundled sound effects. The local player gets immediate one-shot audio on a predicted
@@ -216,6 +217,12 @@ shotgunAudio.loop = false;
 let pistolVoiceCursor = 0;
 let rifleVoiceCursor = 0;
 let minigunVoiceCursor = 0;
+const meleeSwingVoices = makeAudioPool('assets/audio/sharp-swing.mp3', 6, 0.48);
+const meleeHitVoices = makeAudioPool('assets/audio/universfield-punch-140236.mp3', 6, 0.58);
+let meleeSwingVoiceCursor = 0;
+let meleeHitVoiceCursor = 0;
+const seenMeleeSwingEventsByPlayer = new Map<string, Set<string>>();
+const seenMeleeHitEventsByPlayer = new Map<string, Set<string>>();
 
 function safePlay(audio: HTMLAudioElement): void {
   const playPromise = audio.play();
@@ -234,11 +241,13 @@ function playPooledShot(pool: HTMLAudioElement[], cursor: 'pistol' | 'rifle' | '
   safePlay(audio);
 }
 function stopAllWeaponAudio(): void {
-  for (const audio of [...pistolVoices, ...rifleVoices, ...minigunVoices, shotgunAudio]) {
+  for (const audio of [...pistolVoices, ...rifleVoices, ...minigunVoices, shotgunAudio, ...meleeSwingVoices, ...meleeHitVoices]) {
     audio.pause();
     try { audio.currentTime = 0; } catch {}
   }
   observedShotSeqByPlayer.clear();
+  seenMeleeSwingEventsByPlayer.clear();
+  seenMeleeHitEventsByPlayer.clear();
 }
 function playShotSound(weapon: number): void {
   if (weapon === 0) {
@@ -282,6 +291,46 @@ function updateWeaponAudio(players: Record<string, any>, localPlayerId: string):
   for (const id of Array.from(observedShotSeqByPlayer.keys())) {
     if (!(id in (players || {}))) observedShotSeqByPlayer.delete(id);
   }
+}
+
+function playMeleePool(pool: HTMLAudioElement[], cursor: 'swing' | 'hit'): void {
+  if (!pool.length) return;
+  const index = cursor === 'swing' ? meleeSwingVoiceCursor++ % pool.length : meleeHitVoiceCursor++ % pool.length;
+  const audio = pool[index];
+  audio.pause();
+  try { audio.currentTime = 0; } catch {}
+  safePlay(audio);
+}
+function updateMeleeAudio(players: Record<string, any>, _localPlayerId: string): void {
+  // Event keys include the deterministic simulation frame and sequence. Unlike numeric counters,
+  // strings are not blended by the SDK's snapshot interpolator. Bounded seen-key sets also prevent
+  // a rollback/replay of the same event from double-playing the sound while allowing later events.
+  const live = new Set(Object.keys(players || {}));
+  const rememberEvent = (
+    store: Map<string, Set<string>>, playerId: string, eventKey: string, play: () => void,
+  ) => {
+    let seen = store.get(playerId);
+    if (!seen) {
+      // Establish a baseline when first seeing a player; do not play an event from before visibility.
+      store.set(playerId, new Set(eventKey ? [eventKey] : []));
+      return;
+    }
+    if (!eventKey || seen.has(eventKey)) return;
+    play();
+    seen.add(eventKey);
+    if (seen.size > 32) {
+      const oldest = seen.values().next().value;
+      if (oldest !== undefined) seen.delete(oldest);
+    }
+  };
+  for (const [id, player] of Object.entries(players || {})) {
+    const swingKey = String(player?.meleeEventKey || '');
+    rememberEvent(seenMeleeSwingEventsByPlayer, id, swingKey, () => playMeleePool(meleeSwingVoices, 'swing'));
+    const hitKey = String(player?.meleeHitEventKey || '');
+    rememberEvent(seenMeleeHitEventsByPlayer, id, hitKey, () => playMeleePool(meleeHitVoices, 'hit'));
+  }
+  for (const id of Array.from(seenMeleeSwingEventsByPlayer.keys())) if (!live.has(id)) seenMeleeSwingEventsByPlayer.delete(id);
+  for (const id of Array.from(seenMeleeHitEventsByPlayer.keys())) if (!live.has(id)) seenMeleeHitEventsByPlayer.delete(id);
 }
 
 // Death scream is spatial: its origin is the position stored at the death frame, not the respawn point.
@@ -458,6 +507,16 @@ function drawWallsLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:numb
       ctx.fillStyle = hp / 1000 > 0.5 ? '#35d879' : hp / 1000 > 0.25 ? '#f3c84b' : '#ef5b55';
       roundRect(ctx, barX + 1, barY + 1, Math.max(0, (barW - 2) * hp / 1000), 3, 1.5);
     }
+  }
+}
+function drawWaterPuddles(ctx: CanvasRenderingContext2D, puddles: any[], visible: {x:number;y:number;w:number;h:number}): void {
+  if (!imageReady(waterSprite) || !Array.isArray(puddles)) return;
+  const size = 150, half = size / 2;
+  for (const puddle of puddles) {
+    if (!Number.isFinite(puddle?.x) || !Number.isFinite(puddle?.y)) continue;
+    if (puddle.x + half < visible.x || puddle.x - half > visible.x + visible.w || puddle.y + half < visible.y || puddle.y - half > visible.y + visible.h) continue;
+    // The water is only a visual decal: it is never added to Planck or any collision query.
+    ctx.drawImage(waterSprite, puddle.x - half, puddle.y - half, size, size);
   }
 }
 function drawTreesLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:number;w:number;h:number}): void {
@@ -959,6 +1018,7 @@ function drawGame(state: any, self: any, playerId: string): void {
   latestLocalInventory = Array.isArray(mine.inventory) ? mine.inventory.slice() : [0, null, null, null, null];
   updateAuthoritativeMuzzleFlashes(s.shotTrace || [], playerId, renderNow);
   updateWeaponAudio(s.players, playerId);
+  updateMeleeAudio(s.players, playerId);
   updateDeathAudio(s.players, mine, playerId);
   // In v32 predict:'world', the SDK supplies one shared predicted world for player and projectile
   // rendering. The v31 self-prediction package remains available as a rollback baseline.
@@ -980,6 +1040,8 @@ function drawGame(state: any, self: any, playerId: string): void {
   } else {
     drawFloorLayer(ctx, camX, camY, visibleW, visibleH);
   }
+  // Water from destroyed red hydrants is rendered on the ground plane, before buildings/props/players.
+  drawWaterPuddles(ctx, s.waterPuddles || [], visible);
   drawWallsLayer(ctx, visible, s.buildings);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
@@ -1286,10 +1348,6 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#f5fff8'; ctx.font = 'bold 15px system-ui'; ctx.textAlign = 'center';
   ctx.fillText(`${Math.max(0, Math.round(mine.health))} / 100`, w / 2, hpY + 25);
 
-  if (!keys.touch) {
-    ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 292, 24, 8);
-    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · EMPTY SLOT: PUNCH · KNIFE: 2X DAMAGE · F3 DIAG · F4 HITBOX', 24, h - 22, 272);
-  }
   const nearestWorldPickup = (state.pickups || []).some((pickup: any) => {
     const dx = pickup.x - mine.x, dy = pickup.y - mine.y;
     return dx * dx + dy * dy <= 64 * 64;
@@ -1353,6 +1411,8 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   const liveBuildings = (state.buildings || []).filter((b: any) => b.active).length;
   const damagedBuildings = (state.buildings || []).filter((b: any) => b.active && Number(b.health) < 1000).length;
   lines.push(`BUILDINGS ${liveBuildings}/${BUILDINGS.length} active · ${damagedBuildings} damaged · HP 1000 · respawn 5m`);
+  lines.push(`MELEE swing ${mine.meleeSeq ?? 0} · opponent hits ${mine.meleeHitSeq ?? 0} · knife damage 36`);
+  lines.push(`HYDRANT WATER decals ${(state.waterPuddles || []).length} · size 150px · lifetime 150s · no collider`);
   lines.push(`SHOTS local token ${lastLocalShotTokenRequested || '--'} · fired ${confirmedToken ?? '--'} · resolved ${resolvedToken ?? '--'} · queue ${queued}`);
   lines.push(`FIRE GATE baseline ${localShotTokenBaselineReady ? 'READY' : 'WAIT'} · aim ${aimCameraReady ? 'READY' : 'WAIT'} · click pulse ${pendingMouseFirePulse ? 'PENDING' : 'clear'}`);
   lines.push(`LAST LOCAL SHOT ${lastLocalShotWeapon >= 0 ? WEAPON_NAMES[lastLocalShotWeapon] : '--'} · ${lastLocalShotAt ? ((performance.now() - lastLocalShotAt) / 1000).toFixed(1) + 's ago' : '--'}`);
