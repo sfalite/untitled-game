@@ -49,6 +49,18 @@ const seenAuthoritativeShotKeys = new Set<string>();
 let shotTraceBaselineReady = false;
 let latestLocalAimAngle = 0;
 let activePlayerId = '';
+// World prediction intentionally remains enabled. The SDK can roll the whole world back and
+// replay it when remote inputs arrive; smooth only exceptional remote-pose corrections at render
+// time so each client's display does not visibly teleport. Simulation, hitboxes and projectiles
+// remain untouched and authoritative.
+type RemoteVisualPoseCache = {
+  rawX: number; rawY: number; offsetX: number; offsetY: number;
+  lastAt: number; lastSeenAt: number; deathSeq: number;
+};
+const remoteVisualPoseCache = new Map<string, RemoteVisualPoseCache>();
+let remoteVisualCorrectionCount = 0;
+const REMOTE_VISUAL_SMOOTH_SECONDS = 0.16;
+const REMOTE_MAX_NATURAL_SPEED_PX_S = 5.2 * 20;
 let debugOverlayEnabled = false;
 let collisionDebugEnabled = false;
 let latestLocalPlayerName = '';
@@ -886,6 +898,55 @@ function seedLocalShotTokenBaseline(playerState: any): void {
   localFireWasDown = false;
 }
 
+function getRemoteVisualPose(id: string, player: any, now: number, localPlayerId: string): any {
+  // Never smooth the local controlled player: its predicted pose must stay immediate. The
+  // cache affects only the remote sprite presentation, not state, physics, hits, or bullets.
+  if (id === localPlayerId) return player;
+  const rawX = Number(player?.x), rawY = Number(player?.y);
+  if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return player;
+  const deathSeq = Math.max(0, Math.floor(Number(player?.deathSeq) || 0));
+  const old = remoteVisualPoseCache.get(id);
+  if (!old || old.deathSeq !== deathSeq || now - old.lastSeenAt > 1200) {
+    remoteVisualPoseCache.set(id, {
+      rawX, rawY, offsetX: 0, offsetY: 0, lastAt: now, lastSeenAt: now, deathSeq,
+    });
+    return player;
+  }
+
+  const dt = Math.max(0, Math.min(0.1, (now - old.lastAt) / 1000));
+  const decay = Math.exp(-dt / REMOTE_VISUAL_SMOOTH_SECONDS);
+  let offsetX = old.offsetX * decay;
+  let offsetY = old.offsetY * decay;
+  const dx = rawX - old.rawX;
+  const dy = rawY - old.rawY;
+  const distance = Math.hypot(dx, dy);
+  // Normal movement is about 104 px/s. Leave a generous margin for ordinary motion and small
+  // physics contacts; only unusually large single-render corrections get softened.
+  const expectedMove = REMOTE_MAX_NATURAL_SPEED_PX_S * dt * 1.5 + 4.5;
+  if (distance > expectedMove) {
+    // Preserve the position already visible this frame, then let the correction offset decay.
+    // This avoids snapping to a rollback-corrected pose while still converging to the SDK state.
+    const displayXBeforeCorrection = old.rawX + offsetX;
+    const displayYBeforeCorrection = old.rawY + offsetY;
+    offsetX = displayXBeforeCorrection - rawX;
+    offsetY = displayYBeforeCorrection - rawY;
+    remoteVisualCorrectionCount++;
+  }
+
+  remoteVisualPoseCache.set(id, {
+    rawX, rawY, offsetX, offsetY, lastAt: now, lastSeenAt: now, deathSeq,
+  });
+  return { ...player, x: rawX + offsetX, y: rawY + offsetY };
+}
+
+function getRemoteVisualSmoothingStats(): { count: number; maxOffsetPx: number } {
+  let maxOffsetPx = 0;
+  for (const pose of remoteVisualPoseCache.values()) {
+    maxOffsetPx = Math.max(maxOffsetPx, Math.hypot(pose.offsetX, pose.offsetY));
+  }
+  return { count: remoteVisualCorrectionCount, maxOffsetPx };
+}
+
 function drawGame(state: any, self: any, playerId: string): void {
   const ctx = view.begin('#7eb47a');
   const s: any = mergeSelf(state, self, 'players', playerId);
@@ -930,9 +991,10 @@ function drawGame(state: any, self: any, playerId: string): void {
     ctx.fillStyle = p.color; ctx.fillRect(-p.size / 2, -p.size / 2, p.size, Math.max(2, p.size * 0.7)); ctx.restore();
   }
   for (const [id, p] of Object.entries(s.players) as [string, any][]) {
-    // In world-prediction mode, render every player's weapon and body from the same predicted
-    // simulation snapshot as the bullets. Do not override the local pose with a newer cursor angle.
-    const renderPlayer = p;
+    // Keep the simulation's world prediction and projectile coordinates unchanged. Only soften
+    // unusually large visual corrections for remote avatars; their weapon stays attached to the
+    // same rendered pose, while normal movement and the local player's prediction stay immediate.
+    const renderPlayer = getRemoteVisualPose(id, p, renderNow, playerId);
     ctx.save(); ctx.translate(renderPlayer.x, renderPlayer.y);
     if (renderPlayer.invulnerable > 0 && Math.floor(renderPlayer.invulnerable / 4) % 2 === 0) ctx.globalAlpha = 0.5;
     ctx.fillStyle = 'rgba(20,30,35,.24)'; ctx.beginPath(); ctx.ellipse(0, 13, 20, 10, 0, 0, Math.PI * 2); ctx.fill();
@@ -960,6 +1022,11 @@ function drawGame(state: any, self: any, playerId: string): void {
       ctx.fillStyle = 'rgba(10,20,24,.75)'; roundRect(ctx, renderPlayer.x - 20, renderPlayer.y - 22, 40, 5, 3);
       ctx.fillStyle = '#31d879'; roundRect(ctx, renderPlayer.x - 19, renderPlayer.y - 21, 38 * Math.max(0,renderPlayer.health) / 100, 3, 2);
     }
+  }
+  // If a remote player left the room, discard its visual correction cache after a short grace
+  // period; rollback or one-frame state omissions should not reset the cache immediately.
+  for (const [id, pose] of remoteVisualPoseCache) {
+    if (!(id in s.players) && renderNow - pose.lastSeenAt > 1200) remoteVisualPoseCache.delete(id);
   }
   // Muzzle flashes are world-space shot effects, not attached to the player's new cursor angle.
   // This keeps the flash at the actual shot origin if the player turns or moves immediately.
@@ -1271,7 +1338,9 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   const mismatch = netDiagnostics.desyncDisagreed;
   lines.push(`PREDICTION CONFIG WORLD TEST · runtime ${netDiagnostics.mode}`);
   lines.push(`RECONCILIATION SDK rollback/replay · WORLD prediction experiment`);
-  lines.push(`REMOTE PLAYERS WORLD-predicted · remote interpolation bypassed for this test`);
+  lines.push(`REMOTE PLAYERS WORLD-predicted · display-only correction smoothing enabled`);
+  const remoteSmoothingStats = getRemoteVisualSmoothingStats();
+  lines.push(`REMOTE VISUAL CORRECTIONS ${remoteSmoothingStats.count} · active offset ${remoteSmoothingStats.maxOffsetPx.toFixed(1)} px`);
   lines.push(`SIM deterministic Planck · canonical rebuild every 100 frames`);
   lines.push(`SHOTS one shared state.bullets list · dedupe by bullet id · no local bullet copy`);
   lines.push(`FPS ${displayedFps || '--'} · PING ${displayedPingMs == null ? '--' : displayedPingMs + ' ms'} · AVG/MAX ${avgPing == null ? '--' : avgPing}/${maxPing == null ? '--' : maxPing} ms`);
@@ -1886,11 +1955,14 @@ function cursorWorldPosition(): { x: number; y: number } {
 
 async function startWorker(): Promise<void> {
   resetLocalShotState();
+  remoteVisualPoseCache.clear();
+  remoteVisualCorrectionCount = 0;
   const game = await playInWorker({
     // Keep the SDK's normal input lead explicitly enabled. Local prediction still gives the
     // controlled player immediate movement; the room applies inputs in the scheduled frames and
     // the SDK reconciles/replays predictions against authoritative snapshots. This v32 test uses
-    // predict:'world'; compare it with the v31 self-prediction package and revert if it snaps remotely.
+    // predict:'world'; remote pose corrections are smoothed at render time without changing the
+    // authoritative simulation, bullets, collision geometry, or prediction mode.
     inputLead: true,
     input: () => {
       if (keys.pressed('1')) selectedWeapon = 0;
