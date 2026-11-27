@@ -60,7 +60,7 @@ type RemoteVisualPoseCache = {
 const remoteVisualPoseCache = new Map<string, RemoteVisualPoseCache>();
 let remoteVisualCorrectionCount = 0;
 const REMOTE_VISUAL_SMOOTH_SECONDS = 0.16;
-const REMOTE_MAX_NATURAL_SPEED_PX_S = 5.2 * 20;
+const REMOTE_MAX_NATURAL_SPEED_PX_S = 5.6 * 20;
 let debugOverlayEnabled = false;
 let collisionDebugEnabled = false;
 let latestLocalPlayerName = '';
@@ -326,7 +326,7 @@ function updateMeleeAudio(players: Record<string, any>, _localPlayerId: string):
   for (const [id, player] of Object.entries(players || {})) {
     const swingKey = String(player?.meleeEventKey || '');
     rememberEvent(seenMeleeSwingEventsByPlayer, id, swingKey, () => playMeleePool(meleeSwingVoices, 'swing'));
-    const hitKey = String(player?.meleeHitEventKey || '');
+    const hitKey = String(player?.meleeImpactEventKey || player?.meleeHitEventKey || '');
     rememberEvent(seenMeleeHitEventsByPlayer, id, hitKey, () => playMeleePool(meleeHitVoices, 'hit'));
   }
   for (const id of Array.from(seenMeleeSwingEventsByPlayer.keys())) if (!live.has(id)) seenMeleeSwingEventsByPlayer.delete(id);
@@ -510,13 +510,28 @@ function drawWallsLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:numb
   }
 }
 function drawWaterPuddles(ctx: CanvasRenderingContext2D, puddles: any[], visible: {x:number;y:number;w:number;h:number}): void {
-  if (!imageReady(waterSprite) || !Array.isArray(puddles)) return;
+  if (!Array.isArray(puddles)) return;
   const size = 150, half = size / 2;
   for (const puddle of puddles) {
-    if (!Number.isFinite(puddle?.x) || !Number.isFinite(puddle?.y)) continue;
-    if (puddle.x + half < visible.x || puddle.x - half > visible.x + visible.w || puddle.y + half < visible.y || puddle.y - half > visible.y + visible.h) continue;
-    // The water is only a visual decal: it is never added to Planck or any collision query.
-    ctx.drawImage(waterSprite, puddle.x - half, puddle.y - half, size, size);
+    const x = Number(puddle?.x), y = Number(puddle?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (x + half < visible.x || x - half > visible.x + visible.w || y + half < visible.y || y - half > visible.y + visible.h) continue;
+    ctx.save();
+    if (imageReady(waterSprite)) {
+      // Use the supplied water artwork at exactly 150x150 when it is available.
+      ctx.globalAlpha = 0.96;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(waterSprite, x - half, y - half, size, size);
+    } else {
+      // Fallback remains visible if the asset fails to load inside the modd.io iframe.
+      ctx.globalAlpha = 0.82;
+      ctx.fillStyle = '#198fe8';
+      ctx.beginPath(); ctx.ellipse(x, y + 5, 49, 34, -0.12, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#42b5ff';
+      ctx.beginPath(); ctx.ellipse(x - 15, y - 5, 23, 14, -0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(x + 22, y + 2, 22, 13, 0.35, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
   }
 }
 function drawTreesLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:number;w:number;h:number}): void {
@@ -979,7 +994,7 @@ function getRemoteVisualPose(id: string, player: any, now: number, localPlayerId
   const dx = rawX - old.rawX;
   const dy = rawY - old.rawY;
   const distance = Math.hypot(dx, dy);
-  // Normal movement is about 104 px/s. Leave a generous margin for ordinary motion and small
+  // Normal movement is about 112 px/s. Leave a generous margin for ordinary motion and small
   // physics contacts; only unusually large single-render corrections get softened.
   const expectedMove = REMOTE_MAX_NATURAL_SPEED_PX_S * dt * 1.5 + 4.5;
   if (distance > expectedMove) {
@@ -1040,9 +1055,10 @@ function drawGame(state: any, self: any, playerId: string): void {
   } else {
     drawFloorLayer(ctx, camX, camY, visibleW, visibleH);
   }
-  // Water from destroyed red hydrants is rendered on the ground plane, before buildings/props/players.
-  drawWaterPuddles(ctx, s.waterPuddles || [], visible);
   drawWallsLayer(ctx, visible, s.buildings);
+  // Draw water after building geometry so walls cannot hide it. It remains beneath props,
+  // pickups, players and the foreground tree canopy, and never creates a physics collider.
+  drawWaterPuddles(ctx, s.waterPuddles || [], visible);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
   // World-prediction experiment: state and self represent one predicted world, so draw one list.
