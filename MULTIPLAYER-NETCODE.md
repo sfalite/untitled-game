@@ -6,13 +6,13 @@ This note maps the requested multiplayer techniques to the modd.io SDK integrati
 
 | Technique | Current integration | Evidence / diagnostic |
 |---|---|---|
-| Client-side prediction | `sim.ts` uses `predict: 'self'`. The SDK predicts the controlled player locally. | F3 shows predicted/confirmed frames and predicted-vs-confirmed local drift when exposed by `game.inspect()`. |
+| Client-side prediction | `sim.ts` uses `predict: 'world'` in the v32 experiment. The SDK predicts the whole simulation world locally; this may align player/weapon/projectile timelines, but costs more CPU and can snap remote players. | F3 shows predicted/confirmed frames and predicted-vs-confirmed local drift when exposed by `game.inspect()`. |
 | Client-side reconciliation | Owned by the SDK worker: snapshots are compared with predicted state and the SDK corrects/replays as required. No manual teleport/position blend has been added on top. | F3 shows frame gap, drift, desync counts and hash when available. |
-| Remote interpolation buffer | Remote players are rendered from SDK-interpolated frames. The documented SDK API does not expose a direct buffer-duration knob, so the game does not create a second interpolation buffer. | F3 shows remote players count and timing metrics; visually test remote movement in real modd.io rooms. |
+| Remote interpolation buffer | Remote players are part of the shared predicted world in v32, so normal remote interpolation is bypassed during this test. Compare against v31 (`predict: 'self'`) to determine whether the alignment benefit outweighs remote jitter/CPU cost. | F3 shows remote players count and timing metrics; visually test remote movement in real modd.io rooms. |
 | Server-authoritative simulation | Game rules are in `sim.ts`; the room's simulation is authoritative for confirmed projectiles, collisions, damage, health, inventory, loot, and respawn. | All visible bullets are rendered from the simulation state; local sound/muzzle flash are feedback only. |
 | Deterministic simulation and rollback | The sim uses `defineSim`, deterministic `ctx.rng()`, ordered player iteration, and the Planck adapter with `canonicalEvery = 100` to rebuild canonical physics state periodically. SDK prediction/rollback uses those states. | `npx moddio test` validates per-frame hashes across runtimes; `game.inspect()` exposes desync stats when available. |
-| Single projectile source | Projectiles are created in `sim.ts`; renderer draws `state.bullets` only. The client does not create a second temporary bullet/tracer. Shot audio and muzzle flash are immediate visual/audio feedback, not another projectile. | F3 lists local shot token, fired/resolved token and pending queue. |
-| Input lead and latency | `playInWorker` now explicitly sets `inputLead: true`, the SDK's normal scheduled input lead. This works with `predict: 'self'`; do not set `inputLead: false` merely to chase lower ping because that is intended for a different render/input model and can make input feel slower. | F3 shows real `report.pingMs`, plus SDK `report.leadMs` and `report.marginMs` when the API returns them. |
+| Single projectile source | Projectiles are created in `sim.ts`; v32 renderer draws one `state.bullets` collection in the shared world. The client does not create a second temporary bullet/tracer or partition by owner between two timelines. Shot audio and muzzle flash are immediate visual/audio feedback, not another projectile. | F3 lists local shot token, fired/resolved token and pending queue. |
+| Input lead and latency | `playInWorker` now explicitly sets `inputLead: true`, the SDK's normal scheduled input lead. This experiment pairs it with `predict: 'world'`; do not set `inputLead: false` merely to chase lower ping because that is intended for a different render/input model and can make input feel slower. | F3 shows real `report.pingMs`, plus SDK `report.leadMs` and `report.marginMs` when the API returns them. |
 
 ## Limits and validation
 
@@ -33,5 +33,9 @@ The simulation keeps only the newest 32 `shotTrace` events. Each entry includes 
 - `sim.ts` internal rule version is `29`; bump it on future rule changes.
 
 
-## Projectile render timelines (Update v31)
-In `predict: 'self'`, the local player's sprite is rendered from the SDK's `self` predicted world. Local-owned bullets must therefore come from `self.bullets` as well. Remote-owned bullets must come from the interpolated room `state.bullets`. Do not render both copies of the same local shot and do not match them by proximity. Use `shotKey` plus pellet index for diagnostic identity. The room remains authoritative for the real origin, collision, and damage.
+## Projectile render timelines (Update v31 baseline; historical)
+In the v31 `predict: 'self'` baseline, the local player's sprite is rendered from the SDK's `self` predicted world. Local-owned bullets come from `self.bullets`, and remote-owned bullets come from the interpolated room `state.bullets`. This is retained as the rollback reference, not used by the current v32 world experiment.
+
+## v32 world prediction experiment
+
+In the v32 test package, `sim.ts` sets `predict: 'world'`. The renderer draws all projectiles once from `s.bullets`, uses the player aim angle from the same simulation snapshot (no override from the current cursor), and chooses the equipped weapon from `renderPlayer.weapon`. This deliberately tests one timeline for player/weapon/bullets. Test with two and three real modd.io clients; if remote players snap, jitter, or CPU rises, restore the v31 package using `predict: 'self'`.

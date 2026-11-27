@@ -17,3 +17,16 @@ The renderer had mixed timelines: the player sprite used the SDK's local predict
 
 ## Not run
 - `npx moddio test`, `npx moddio play`, and live two-player modd.io validation were not run in this environment. Validate them in the actual project before publishing.
+
+
+# Update v32 — world prediction experiment
+
+## Changes
+- Switched `sim.ts` from `predict: 'self'` to `predict: 'world'` for a controlled live comparison.
+- Renderer draws bullets from one shared `s.bullets` list and deduplicates by authoritative bullet id; it no longer partitions the local predicted bullets and remote room bullets into separate timelines.
+- Player rotation and selected weapon are rendered from the same simulation snapshot instead of overriding local aim with the most recent cursor sample.
+- Updated F3 status labels and developer docs to clearly mark world prediction as experimental.
+
+## Not yet verified
+- The official `npx moddio test` and `npx moddio play` commands were not run in this environment.
+- No live modd.io 2/3-player match was run. `predict: 'world'` can increase CPU and cause remote snapping; compare against the v31 baseline before keeping it.

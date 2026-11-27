@@ -546,13 +546,14 @@ function recordShotTrace(
 
 export default defineSim({
   name: 'chaos-city',
-  version: '29',
+  version: '30',
   tickRate: 20,
   maxPlayers: 32,
-  // Predict only the local player. The SDK interpolates remote players from authoritative
-  // room frames; world prediction can visibly snap remote physics bodies when Planck worlds
-  // are corrected after rollback. Bullets stay authoritative and are never reattached to a muzzle.
-  predict: 'self',
+  // EXPERIMENTAL v32: predict the whole shared world so player, weapon pose, bullets, and
+  // collision state are drawn from one prediction timeline. This can cost more CPU and may make
+  // remote bodies snap when Planck is corrected. Test with 2-3 live clients before keeping it.
+  // Roll back to predict: 'self' if remote players jitter/teleport or CPU use becomes excessive.
+  predict: 'world',
   physics: box2dPhysics,
   input: { move: ['i8', 'i8'], aim: 'u16', weapon: 'u8', shotToken: 'u32', shotWeapon: 'u8', buttons: { flags: ['fire', 'smash', 'pickup', 'drop'] } },
 
