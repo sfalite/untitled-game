@@ -13,6 +13,7 @@ import {
 } from '@moddio/client/browser';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
+const pixiToggleButton = document.getElementById('pixi-toggle') as HTMLButtonElement | null;
 // Acquire the visible overlay with alpha enabled so Pixi's static layer can show through when
 // The Pixi prototype is enabled. Canvas2D baseline mode still paints its opaque background each frame.
 canvas.getContext('2d', { alpha: true });
@@ -45,6 +46,21 @@ let pixiNotice = '';
 let pixiNoticeUntil = 0;
 let pixiRendererWidth = 0;
 let pixiRendererHeight = 0;
+
+function syncPixiToggleButton(): void {
+  if (!pixiToggleButton) return;
+  const active = pixiPrototypeEnabled && pixiAvailable;
+  const failed = pixiStatus.includes('FAILED') || pixiStatus.includes('ERROR');
+  const initializing = pixiStatus.includes('INITIALIZING');
+  pixiToggleButton.classList.toggle('active', active);
+  pixiToggleButton.classList.toggle('error', failed);
+  pixiToggleButton.setAttribute('aria-pressed', active ? 'true' : 'false');
+  pixiToggleButton.textContent = active
+    ? 'PIXIJS WEBGL ACTIVE · CLICK TO SWITCH BACK'
+    : failed ? 'PIXIJS UNAVAILABLE · OPEN F3 FOR ERROR'
+    : initializing ? 'INITIALIZING PIXIJS…'
+    : 'ENABLE PIXIJS TEST · CLICK HERE';
+}
 
 const TILE = 64;
 const COLS = 42;
@@ -475,6 +491,11 @@ function buildPixiStaticWorld(): PixiContainer {
       .stroke({ color: 0x45e6f2, alpha: 0.98, width: 3 });
   }
   root.addChild(buildings);
+  // Strong, temporary A/B marker: a subtle cyan wash across the road surface makes it obvious
+  // when Pixi is actually rendering, without changing physics, collision geometry, or gameplay.
+  const pixiModeWash = new PixiGraphics();
+  pixiModeWash.rect(0, 0, WORLD_W, WORLD_H).fill({ color: 0x00d8ff, alpha: 0.075 });
+  root.addChild(pixiModeWash);
   return root;
 }
 
@@ -537,9 +558,11 @@ async function togglePixiRendererPrototype(): Promise<void> {
     pixiStatus = 'CANVAS2D BASELINE';
     pixiNotice = 'Canvas2D baseline renderer';
     pixiNoticeUntil = performance.now() + 2500;
+    syncPixiToggleButton();
     return;
   }
   pixiStatus = 'INITIALIZING PIXIJS…';
+  syncPixiToggleButton();
   pixiErrorMessage = '';
   pixiNotice = 'Initializing PixiJS static-world prototype…';
   pixiNoticeUntil = performance.now() + 3500;
@@ -550,6 +573,18 @@ async function togglePixiRendererPrototype(): Promise<void> {
   pixiStatus = 'PIXIJS STATIC WORLD + CANVAS2D ENTITIES';
   pixiNotice = 'PixiJS static world enabled · N to switch back';
   pixiNoticeUntil = performance.now() + 3000;
+  syncPixiToggleButton();
+}
+
+// The A/B renderer has a real DOM button in addition to the N/F6 shortcuts. This avoids
+// relying on the modd.io canvas keyboard sampler for a test-only toggle that can be missed.
+if (pixiToggleButton) {
+  pixiToggleButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void togglePixiRendererPrototype().finally(syncPixiToggleButton);
+  });
+  syncPixiToggleButton();
 }
 
 function renderPixiStaticWorld(camX: number, camY: number, zoom: number): boolean {
@@ -574,6 +609,7 @@ function renderPixiStaticWorld(camX: number, camY: number, zoom: number): boolea
     pixiErrorMessage = String((error as any)?.message || error || 'unknown render error').slice(0, 180);
     pixiNotice = 'PixiJS render failed; Canvas2D restored · check F3';
     pixiNoticeUntil = performance.now() + 4000;
+    syncPixiToggleButton();
     return false;
   }
 }
@@ -939,6 +975,7 @@ function seedLocalShotTokenBaseline(playerState: any): void {
 }
 
 function drawGame(state: any, self: any, playerId: string): void {
+  if (pixiToggleButton) { pixiToggleButton.style.display = 'block'; syncPixiToggleButton(); }
   const ctx = view.begin('#7eb47a');
   const s: any = mergeSelf(state, self, 'players', playerId);
   if (!s || !s.players || !s.players[playerId]) return;
@@ -1801,6 +1838,7 @@ function menuButton(ctx: CanvasRenderingContext2D, x:number,y:number,w:number,h:
 }
 function drawMenu(): void {
   pixiCanvas.style.display = 'none';
+  if (pixiToggleButton) pixiToggleButton.style.display = 'none';
   const ctx = view.begin('#0a151a');
   const w = view.width, h = view.height;
   menuHits = [];
@@ -2138,6 +2176,17 @@ if (await atMenu()) {
   catch (err: any) { stopAllWeaponAudio(); mode = 'menu'; menuError = `Unable to connect: ${String(err?.message || err)}`; await refreshRooms(); }
 }
 
+// Keyboard fallback for the A/B renderer. Ignore repeat events so holding N never toggles twice.
+window.addEventListener('keydown', (event: KeyboardEvent) => {
+  if (mode !== 'game' || event.repeat) return;
+  const key = event.key.toLowerCase();
+  if (key !== 'n' && key !== 'f6') return;
+  const target = event.target as HTMLElement | null;
+  if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
+  event.preventDefault();
+  void togglePixiRendererPrototype().finally(syncPixiToggleButton);
+}, { capture: true });
+
 function appLoop(): void {
   if (mode === 'menu') {
     drawMenu();
@@ -2146,7 +2195,6 @@ function appLoop(): void {
   } else if (mode === 'game') {
     if (keys.pressed('f3')) debugOverlayEnabled = !debugOverlayEnabled;
     if (keys.pressed('f4')) collisionDebugEnabled = !collisionDebugEnabled;
-    if (keys.pressed('n') || keys.pressed('f6')) void togglePixiRendererPrototype();
     if (keys.pressed('m')) void enterMenu();
     else if (keys.pressed('mouse0')) {
       const slot = weaponSlotAt(keys.mouse.x, keys.mouse.y);
