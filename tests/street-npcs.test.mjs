@@ -10,7 +10,7 @@ const sprite = fs.readFileSync(path.join(root, 'assets/npcs/man-blue-stand.png')
 
 assert.match(sim, /type StreetNpc\s*=/, 'simulation defines a deterministic street NPC state');
 assert.match(sim, /NPC_MAX_HEALTH\s*=\s*100/, 'pedestrians have 100 HP');
-assert.match(sim, /version:\s*'38'/, 'shared simulation schema version is bumped for replicated NPC state');
+assert.match(sim, /version:\s*'40'/, 'shared simulation schema version is bumped for replicated NPC state');
 assert.match(sim, /npcs:\s*StreetNpc\[\]/, 'NPCs are part of the shared simulation state');
 assert.match(sim, /updateStreetNpcs\(state, ctx\)/, 'AI updates from the authoritative deterministic step');
 assert.match(sim, /NPC_WAYPOINTS/, 'pedestrians use street waypoint destinations');
