@@ -25,8 +25,9 @@ const WEAPON_COLORS = ['#ffe07a', '#ffd16a', '#ffb347', '#ff8f53', '#fff0b0'];
 // Keep in sync with sim.ts so a rendered barrel and its authoritative shot share an origin.
 const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 24, 25];
 const WEAPON_MUZZLE_SIDE = 8;
-// Match the simulation's 20 Hz cooldowns locally. Only audio and muzzle flash are predicted;
-// all visible bullets come from the authoritative room state to prevent duplicates and bad origins.
+// Match the simulation's 20 Hz cooldowns locally. The SDK predicts the local player's world;
+// render local-owned bullets from `self` and remote-owned bullets from interpolated `state` so each
+// projectile shares a timeline with its shooter, without drawing both versions of the same shot.
 const CLIENT_TICK_MS = 50;
 const CLIENT_WEAPON_COOLDOWN_TICKS = [8, 7, 3, 3, 12];
 let localShotToken = 0;
@@ -42,8 +43,11 @@ let pendingMouseFirePulse = false;
 // Auto weapons need a deliberate hold before repeating; a normal click must create one shot.
 const AUTO_FIRE_HOLD_DELAY_MS = 260;
 let latestLocalInventory: Array<number | null> = [0, null, null, null, null];
-let localInstantMuzzleUntil = 0;
-let localInstantMuzzleWeapon = -1;
+type MuzzleFlashEffect = { key: string; x: number; y: number; angle: number; weaponId: number; expiresAt: number; durationMs: number; source: 'predicted' | 'authoritative' };
+const muzzleFlashEffects = new Map<string, MuzzleFlashEffect>();
+const localPredictedShotAt = new Map<string, number>();
+const seenAuthoritativeShotKeys = new Set<string>();
+let shotTraceBaselineReady = false;
 let latestLocalAimAngle = 0;
 let activePlayerId = '';
 let debugOverlayEnabled = false;
@@ -594,26 +598,114 @@ function drawWeaponIcon(ctx: CanvasRenderingContext2D, x: number, y: number, wea
   drawWeaponShape(ctx, weapon);
   ctx.restore();
 }
-function drawMuzzleSpark(ctx: CanvasRenderingContext2D, player: any, weaponId: number, forcePredictedFlash = false): void {
-  const now = performance.now();
-  const predictedFlash = forcePredictedFlash && weaponId === localInstantMuzzleWeapon && now < localInstantMuzzleUntil;
-  if (!predictedFlash && (!(player.muzzleFlash > 0) || player.shotWeapon !== weaponId)) return;
-  const alpha = predictedFlash
-    ? clampNumber((localInstantMuzzleUntil - now) / 110, 0, 1)
-    : Math.min(1, player.muzzleFlash / 2);
-  const radius = weaponId === 3 ? 8 : weaponId === 4 ? 7 : 5.5;
-  const barrelLength = WEAPON_MUZZLE_FORWARD[weaponId] ?? WEAPON_MUZZLE_FORWARD[0];
-  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(WEAPON_MUZZLE_SIDE, -barrelLength);
-  ctx.fillStyle = '#fff6b0'; ctx.strokeStyle = '#ffac42'; ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, -radius * 1.7); ctx.lineTo(radius * 0.42, -radius * 0.42);
-  ctx.lineTo(radius * 1.5, 0); ctx.lineTo(radius * 0.38, radius * 0.38);
-  ctx.lineTo(0, radius * 1.25); ctx.lineTo(-radius * 0.38, radius * 0.38);
-  ctx.lineTo(-radius * 1.5, 0); ctx.lineTo(-radius * 0.42, -radius * 0.42);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0, 0, radius * 0.42, 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
+function calculateClientMuzzle(x: number, y: number, angle: number, weaponId: number): { x: number; y: number } {
+  const forward = WEAPON_MUZZLE_FORWARD[weaponId] ?? WEAPON_MUZZLE_FORWARD[0];
+  return {
+    x: x + Math.cos(angle) * forward - Math.sin(angle) * WEAPON_MUZZLE_SIDE,
+    y: y + Math.sin(angle) * forward + Math.cos(angle) * WEAPON_MUZZLE_SIDE,
+  };
 }
+function shotFlashKey(owner: unknown, token: unknown): string {
+  return `${String(owner || '')}:${Math.floor(Number(token) || 0) >>> 0}`;
+}
+function updateAuthoritativeMuzzleFlashes(traceInput: any[], localPlayerId: string, now: number): void {
+  const trace = Array.isArray(traceInput) ? traceInput : [];
+  if (!shotTraceBaselineReady) {
+    // The first state may contain recent historical events. Do not replay old remote flashes, but
+    // if a local predicted flash already exists for one of them, reconcile that same flash in place.
+    for (const event of trace) {
+      if (event?.kind !== 'spawn' || Number(event.pelletIndex) !== 0) continue;
+      const key = shotFlashKey(event.owner, event.token);
+      seenAuthoritativeShotKeys.add(key);
+      if (String(event.owner) === localPlayerId && localPredictedShotAt.has(key)) {
+        const existing = muzzleFlashEffects.get(key);
+        if (existing && existing.expiresAt > now) {
+          // Keep the shooter's local flash anchored to the predicted muzzle for this shot.
+          // Moving it to the later room-confirmed pose made flashes jump away from the hand.
+          existing.source = 'authoritative';
+        } else {
+          muzzleFlashEffects.delete(key);
+        }
+        localPredictedShotAt.delete(key);
+      }
+    }
+    shotTraceBaselineReady = true;
+  } else {
+    for (const event of trace) {
+      if (!event || (event.kind !== 'spawn' && event.kind !== 'rejected')) continue;
+      const key = shotFlashKey(event.owner, event.token);
+      if (event.kind === 'rejected') {
+        if (String(event.owner) === localPlayerId) {
+          const effect = muzzleFlashEffects.get(key);
+          if (effect?.source === 'predicted') muzzleFlashEffects.delete(key);
+          localPredictedShotAt.delete(key);
+        }
+        seenAuthoritativeShotKeys.add(key);
+        continue;
+      }
+      if (Number(event.pelletIndex) !== 0 || seenAuthoritativeShotKeys.has(key)) continue;
+      seenAuthoritativeShotKeys.add(key);
+      const isLocalPredictedShot = String(event.owner) === localPlayerId && localPredictedShotAt.has(key);
+      const existing = muzzleFlashEffects.get(key);
+      if (isLocalPredictedShot) {
+        // Confirmation updates an unexpired local flash to the authoritative origin. If its instant
+        // flash already ended, do not create a second delayed flash for the same shot.
+        if (existing && existing.expiresAt > now) {
+          // Preserve the local shot's captured world-space origin; never reattach a flash to the
+          // currently interpolated player pose when the authoritative event arrives later.
+          existing.source = 'authoritative';
+          existing.expiresAt = Math.min(existing.expiresAt, now + 35);
+        } else {
+          muzzleFlashEffects.delete(key);
+        }
+        localPredictedShotAt.delete(key);
+      } else {
+        const weaponId = Math.max(0, Math.min(4, Math.floor(Number(event.weaponId) || 0)));
+        const angle = Number.isFinite(Number(event.angle)) ? Number(event.angle) : 0;
+        if (Number.isFinite(Number(event.x)) && Number.isFinite(Number(event.y))) {
+          muzzleFlashEffects.set(key, {
+            key, x: Number(event.x), y: Number(event.y), angle, weaponId,
+            expiresAt: now + 75, durationMs: 75, source: 'authoritative',
+          });
+        }
+      }
+    }
+  }
+  for (const [key, effect] of muzzleFlashEffects) if (effect.expiresAt <= now) muzzleFlashEffects.delete(key);
+  for (const [key, createdAt] of localPredictedShotAt) if (now - createdAt > 2000) localPredictedShotAt.delete(key);
+  while (seenAuthoritativeShotKeys.size > 512) {
+    const oldest = seenAuthoritativeShotKeys.values().next().value;
+    if (oldest === undefined) break;
+    seenAuthoritativeShotKeys.delete(oldest);
+  }
+  while (muzzleFlashEffects.size > 32) {
+    const oldest = muzzleFlashEffects.keys().next().value;
+    if (oldest === undefined) break;
+    muzzleFlashEffects.delete(oldest);
+  }
+}
+function drawMuzzleFlashEffects(ctx: CanvasRenderingContext2D, now: number): void {
+  for (const effect of muzzleFlashEffects.values()) {
+    const alpha = clampNumber((effect.expiresAt - now) / effect.durationMs, 0, 1);
+    if (alpha <= 0) continue;
+    const radius = effect.weaponId === 3 ? 8 : effect.weaponId === 4 ? 7 : 5.5;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(effect.x, effect.y);
+    // Weapon art and player sprite face up in local coordinates; adding 90° aligns the flash with aim.
+    ctx.rotate(effect.angle + Math.PI / 2);
+    ctx.fillStyle = '#fff6b0'; ctx.strokeStyle = '#ffac42'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -radius * 1.7); ctx.lineTo(radius * 0.42, -radius * 0.42);
+    ctx.lineTo(radius * 1.5, 0); ctx.lineTo(radius * 0.38, radius * 0.38);
+    ctx.lineTo(0, radius * 1.25); ctx.lineTo(-radius * 0.38, radius * 0.38);
+    ctx.lineTo(-radius * 1.5, 0); ctx.lineTo(-radius * 0.42, -radius * 0.42);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0, 0, radius * 0.42, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+
 function resetLocalShotState(): void {
   localShotToken = 0;
   localShotTokenBaselineReady = false;
@@ -627,8 +719,10 @@ function resetLocalShotState(): void {
   suppressCurrentMousePress = false;
   pendingMouseFirePulse = false;
   latestLocalInventory = [0, null, null, null, null];
-  localInstantMuzzleUntil = 0;
-  localInstantMuzzleWeapon = -1;
+  muzzleFlashEffects.clear();
+  localPredictedShotAt.clear();
+  seenAuthoritativeShotKeys.clear();
+  shotTraceBaselineReady = false;
   latestLocalAimAngle = 0;
   aimCameraReady = false;
   activePlayerId = '';
@@ -651,8 +745,16 @@ function registerLocalShotInput(fireDown: boolean, now: number, dropDown = false
   lastLocalShotTokenRequested = localShotToken;
   lastLocalShotAt = now;
   lastLocalShotWeapon = weaponId;
-  localInstantMuzzleWeapon = weaponId;
-  localInstantMuzzleUntil = now + 110;
+  const shotKey = `${activePlayerId}:${localShotToken}`;
+  const angle = latestLocalAimAngle;
+  const muzzle = calculateClientMuzzle(localPos.x, localPos.y, angle, weaponId);
+  // Keep the instant local flash at the exact world-space pose sampled for this shot. It must
+  // not rotate with the cursor or follow the player after the trigger was pressed.
+  muzzleFlashEffects.set(shotKey, {
+    key: shotKey, x: muzzle.x, y: muzzle.y, angle, weaponId,
+    expiresAt: now + 110, durationMs: 110, source: 'predicted',
+  });
+  localPredictedShotAt.set(shotKey, now);
   playShotSound(weaponId);
 }
 
@@ -662,8 +764,8 @@ function drawBulletGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, co
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.fillStyle = color || '#ffd16a';
-  ctx.shadowColor = color || '#ffd16a';
-  ctx.shadowBlur = 6;
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
   ctx.beginPath(); ctx.arc(x, y, 3.2, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
@@ -673,22 +775,41 @@ function authoritativeShotKey(b: any): string {
   const token = Math.round(Number(b?.shotToken) || 0);
   return owner && token > 0 ? `${owner}:${token}` : '';
 }
-function drawSynchronizedBullets(ctx: CanvasRenderingContext2D, bulletsInput: any[]): void {
-  // There is only one projectile rendering source on every client: the authoritative simulation.
-  // The previous predicted-tracer + snapshot-matching system could show two bullets or a tracer at
-  // a guessed muzzle when snapshots arrived late. Local audio/spark remain immediate; real bullets
-  // appear once the room has resolved their origin, trajectory, and collision.
-  const bullets = Array.isArray(bulletsInput) ? bulletsInput : [];
+function drawSynchronizedBullets(
+  ctx: CanvasRenderingContext2D,
+  roomBulletsInput: any[],
+  predictedSelfBulletsInput: any,
+  localPlayerId: string,
+): void {
+  // IMPORTANT: with predict:'self', `self` is the SDK's predicted copy of the whole world at
+  // the local player's clock, while `state` is the interpolated room world. Drawing local bullets
+  // from `state` but the local character from `self` made shots visibly start behind/outside the
+  // weapon. Draw local-owned bullets ONLY from `self`, and remote-owned bullets ONLY from `state`.
+  // This is exact by owner and shotKey/pelletIndex; it does not guess matches by proximity or render
+  // a separate custom projectile, so the same local shot cannot be drawn twice.
+  const roomBullets = Array.isArray(roomBulletsInput) ? roomBulletsInput : [];
+  const usePredictedSelf = Array.isArray(predictedSelfBulletsInput);
+  const selfBullets = usePredictedSelf ? predictedSelfBulletsInput as any[] : roomBullets;
   const drawnKeys = new Set<string>();
-  for (const bullet of bullets) {
+  const drawOne = (bullet: any) => {
     const x = Number(bullet?.x), y = Number(bullet?.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     const shotKey = authoritativeShotKey(bullet);
     const pelletIndex = Math.round(Number(bullet?.pelletIndex) || 0);
-    const key = shotKey ? `${shotKey}#${pelletIndex}` : `id:${String(bullet?.id)}`;
-    if (drawnKeys.has(key)) continue;
+    const key = shotKey ? `${shotKey}#${pelletIndex}` : `id:${String(bullet?.owner || '')}:${String(bullet?.id)}`;
+    if (drawnKeys.has(key)) return;
     drawnKeys.add(key);
     drawBulletGlyph(ctx, x, y, bullet?.color || '#ffd16a');
+  };
+  // Remote players and their bullets share the room's interpolation timeline.
+  for (const bullet of roomBullets) {
+    if (usePredictedSelf && String(bullet?.owner || '') === localPlayerId) continue;
+    drawOne(bullet);
+  }
+  // The local player's projectile copy is taken from the very same predicted world as their sprite.
+  for (const bullet of selfBullets) {
+    if (String(bullet?.owner || '') !== localPlayerId) continue;
+    drawOne(bullet);
   }
 }
 
@@ -737,11 +858,11 @@ function drawCollisionDebugWorld(ctx: CanvasRenderingContext2D, state: any): voi
     ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(mx, my); ctx.stroke();
     ctx.beginPath(); ctx.arc(mx, my, 4.5, 0, Math.PI * 2); ctx.stroke();
   }
-  // Pickups and authoritative bullets.
+  // Weapon pickups are outlined for debugging. Do not draw a second marker over every live bullet:
+  // the normal renderer already draws the one authoritative projectile, and double markers looked
+  // like duplicate shots whenever F4 collision debugging was enabled.
   ctx.strokeStyle = 'rgba(255,170,50,.95)';
   for (const p of state.pickups || []) { ctx.beginPath(); ctx.arc(p.x, p.y, 18, 0, Math.PI * 2); ctx.stroke(); }
-  ctx.fillStyle = '#ff42e8';
-  for (const b of state.bullets || []) { ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI * 2); ctx.fill(); }
   ctx.restore();
 }
 
@@ -775,10 +896,11 @@ function drawGame(state: any, self: any, playerId: string): void {
   seedLocalShotTokenBaseline(mine);
   const renderNow = performance.now();
   latestLocalInventory = Array.isArray(mine.inventory) ? mine.inventory.slice() : [0, null, null, null, null];
+  updateAuthoritativeMuzzleFlashes(s.shotTrace || [], playerId, renderNow);
   updateWeaponAudio(s.players, playerId);
   updateDeathAudio(s.players, mine, playerId);
-  // With predict:'self', local movement is predicted while remote players are interpolated.
-  // Projectile visuals always use authoritative simulation coordinates, never a guessed current muzzle.
+  // With predict:'self', local movement and local projectiles are predicted in `self`; remote
+  // players and remote projectiles remain on the room-interpolated timeline. Never mix them.
   const fit = Math.min(view.width / 960, view.height / 640);
   const zoom = Math.max(0.68, Math.min(1.35, fit * 1.2));
   const visibleW = view.width / zoom;
@@ -801,7 +923,7 @@ function drawGame(state: any, self: any, playerId: string): void {
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
   // All visible projectiles use the same authoritative source on local and remote clients.
-  drawSynchronizedBullets(ctx, s.bullets || []);
+  drawSynchronizedBullets(ctx, s.bullets || [], self?.bullets, playerId);
   for (const p of s.particles || []) {
     const alpha = Math.max(0.08, Math.min(1, p.life / 25));
     ctx.save(); ctx.globalAlpha = alpha; ctx.translate(p.x, p.y); ctx.rotate(p.rotation || 0);
@@ -830,10 +952,6 @@ function drawGame(state: any, self: any, playerId: string): void {
     const equippedWeaponId = Array.isArray(renderPlayer.inventory) ? renderPlayer.inventory[id === playerId ? selectedWeapon : renderPlayer.weapon] : 0;
     if (typeof equippedWeaponId === 'number' && equippedWeaponId >= 0 && equippedWeaponId < WEAPON_NAMES.length) {
       drawWeaponLocal(ctx, equippedWeaponId, 1);
-      const localPredictedFlash = id === playerId
-        && renderNow < localInstantMuzzleUntil
-        && localInstantMuzzleWeapon === equippedWeaponId;
-      drawMuzzleSpark(ctx, renderPlayer, equippedWeaponId, localPredictedFlash);
     }
     ctx.restore();
     ctx.fillStyle = '#16252c'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
@@ -843,6 +961,9 @@ function drawGame(state: any, self: any, playerId: string): void {
       ctx.fillStyle = '#31d879'; roundRect(ctx, renderPlayer.x - 19, renderPlayer.y - 21, 38 * Math.max(0,renderPlayer.health) / 100, 3, 2);
     }
   }
+  // Muzzle flashes are world-space shot effects, not attached to the player's new cursor angle.
+  // This keeps the flash at the actual shot origin if the player turns or moves immediately.
+  drawMuzzleFlashEffects(ctx, renderNow);
   // Trees are drawn as the foreground trees layer from the user's 128x128 sprite.
   drawTreesLayer(ctx, visible);
   // Small aim reticle.
@@ -1150,7 +1271,7 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   lines.push(`RECONCILIATION SDK rollback/replay · self prediction`);
   lines.push(`REMOTE BUFFER SDK interpolation · no second custom buffer`);
   lines.push(`SIM deterministic Planck · canonical rebuild every 100 frames`);
-  lines.push(`SHOTS authoritative-only visuals · one projectile source`);
+  lines.push(`SHOTS local bullets=self predicted · remote bullets=room interpolated · owner partition`);
   lines.push(`FPS ${displayedFps || '--'} · PING ${displayedPingMs == null ? '--' : displayedPingMs + ' ms'} · AVG/MAX ${avgPing == null ? '--' : avgPing}/${maxPing == null ? '--' : maxPing} ms`);
   lines.push(`FRAMES confirmed ${confirmed ?? '--'} · predicted ${predicted ?? '--'} · gap ${frameGap ?? '--'}`);
   lines.push(`INPUT LEAD ON · measured ${netDiagnostics.leadMs == null ? '--' : Math.round(netDiagnostics.leadMs) + ' ms'} · MARGIN ${netDiagnostics.marginMs == null ? '--' : Math.round(netDiagnostics.marginMs) + ' ms'}`);
@@ -1804,8 +1925,8 @@ async function startWorker(): Promise<void> {
       // Semi-auto Glock/Shotgun: one shot per press, even if the browser reports a longer click.
       // AK/M249/M134: fire once immediately, then repeat only after an intentional hold.
       const shotRequested = fireEdge || (isAutomatic && pressedFire && localFireHeldSince > 0 && now - localFireHeldSince >= AUTO_FIRE_HOLD_DELAY_MS);
-      // Register a discrete shot token. Sound and muzzle flash are immediate; the projectile
-      // itself is drawn once from the authoritative simulation state.
+      // Register a discrete shot token. The SDK's predicted local world provides the local bullet;
+      // remote bullets remain interpolated from the room state. The renderer partitions by owner.
       registerLocalShotInput(shotRequested, now, keys.keys.has('g'));
       const selectedItemId = latestLocalInventory[selectedWeapon];
       const shotWeaponId = typeof selectedItemId === 'number' ? selectedItemId : 255;
@@ -1814,7 +1935,6 @@ async function startWorker(): Promise<void> {
         aim,
         weapon: selectedWeapon,
         shotToken: localShotToken,
-        shotAim: aim,
         shotWeapon: shotWeaponId,
         buttons: { fire: pressedFire || mouseClickPulse, smash: keys.pressed(' '), pickup: keys.keys.has('e'), drop: keys.keys.has('g') },
       };
