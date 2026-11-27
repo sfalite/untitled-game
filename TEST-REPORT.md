@@ -59,7 +59,7 @@ The renderer had mixed timelines: the player sprite used the SDK's local predict
 
 ## Local checks
 - TypeScript no-emit check passed with temporary ambient declarations for SDK modules.
-- Isolated tests passed for: initialization without offset, ordinary 5.2 px/tick movement not triggering correction, large remote position correction remaining visually continuous on the correction frame, offset gradually decaying toward target, respawn sequence change snapping to spawn, and stale cache expiration.
+- Isolated tests passed for: initialization without offset, ordinary speed-budget movement not triggering correction, large remote position correction remaining visually continuous on the correction frame, offset gradually decaying toward target, respawn sequence change snapping to spawn, and stale cache expiration.
 - Static check confirmed `predict: 'world'` remains set and `sim.ts` gameplay/physics logic is unchanged.
 - ZIP structure and CRC verified.
 

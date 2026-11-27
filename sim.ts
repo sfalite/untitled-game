@@ -10,7 +10,7 @@ const W = COLS * TILE;
 const H = ROWS * TILE;
 const PPM = 32;
 const PLAYER_SPAWN_R = 28;
-const MOVE_SPEED = 5.2; // pixels per simulation tick; ~10.6% faster than v24
+const MOVE_SPEED = 5.6; // pixels per simulation tick; a small boost over v35 for snappier movement
 const SMASH_RANGE = 60;
 const SMASH_COOLDOWN = 12;
 const MAX_PARTICLES = 180;
@@ -171,6 +171,7 @@ type Player = {
   score: number; health: number; invulnerable: number; color: number; muzzleFlash: number; shotSeq: number; shotWeapon: number;
   deathSeq: number; deathX: number; deathY: number;
   meleeSeq: number; meleeHitSeq: number; meleeEventKey: string; meleeHitEventKey: string;
+  meleeImpactSeq: number; meleeImpactEventKey: string;
 };
 type WeaponPickup = { id: number; x: number; y: number; weaponId: number; angle: number; createdFrame: number };
 type Bullet = { id: number; owner: string; shotSeq: number; shotToken: number; shotKey: string; pelletIndex: number; x: number; y: number; weaponId: number; vx: number; vy: number; damage: number; life: number; color: string; bornFrame: number; age: number };
@@ -506,10 +507,13 @@ function freeInventorySlot(p: Player): number {
 }
 function addWaterPuddle(state: State, prop: Prop, ctx: any): void {
   // Water is a render-only effect: it has no Planck body, collider, or gameplay interaction.
+  // Store a one-time position snapshot so later physics movement or prop respawn cannot move it.
   if (!Array.isArray(state.waterPuddles)) state.waterPuddles = [];
   if (!Number.isFinite(state.nextWaterPuddleId)) state.nextWaterPuddleId = 1;
+  const x = Number.isFinite(prop.x) ? prop.x : prop.mapX;
+  const y = Number.isFinite(prop.y) ? prop.y : prop.mapY;
   state.waterPuddles.push({
-    id: state.nextWaterPuddleId++, x: prop.x, y: prop.y,
+    id: state.nextWaterPuddleId++, x, y,
     expiresAtFrame: ctx.frame + WATER_PUDDLE_LIFETIME_TICKS,
   });
   // Keep the state bounded in the unlikely case of rapid hydrant destruction over a long session.
@@ -574,6 +578,11 @@ function muzzlePosition(p: Pick<Player, 'x' | 'y' | 'aimAngle'>, weaponId: numbe
   };
 }
 
+function recordMeleeImpact(player: Player, ctx: any): void {
+  player.meleeImpactSeq = (Number(player.meleeImpactSeq) || 0) + 1;
+  player.meleeImpactEventKey = `impact:${Math.max(0, Math.floor(Number(ctx?.frame) || 0))}:${player.meleeImpactSeq}`;
+}
+
 // Small deterministic diagnostic ring buffer. It records the authoritative lifecycle of shots
 // without changing gameplay decisions. Keeping only the newest events bounds replicated state.
 function recordShotTrace(
@@ -593,7 +602,7 @@ function recordShotTrace(
 
 export default defineSim({
   name: 'chaos-city',
-  version: '32',
+  version: '36',
   tickRate: 20,
   maxPlayers: 32,
   // Keep world prediction enabled so player poses, weapons, bullets, and collisions share one
@@ -645,6 +654,7 @@ export default defineSim({
       color: ctx.int(6), muzzleFlash: 0, shotSeq: 0, shotWeapon: 0,
       deathSeq: 0, deathX: spawn.x, deathY: spawn.y,
       meleeSeq: 0, meleeHitSeq: 0, meleeEventKey: '', meleeHitEventKey: '',
+      meleeImpactSeq: 0, meleeImpactEventKey: '',
     };
   },
 
@@ -886,13 +896,20 @@ export default defineSim({
         if (meleeHit) {
           if (meleeHit.kind === 'prop' && meleeHit.prop) {
             damageProp(state, ctx, meleeHit.prop, damage, p);
+            // Play impact audio on a successful contact with a destructible prop.
+            recordMeleeImpact(p, ctx);
           } else if (meleeHit.kind === 'building' && typeof meleeHit.buildingIndex === 'number') {
             damageBuilding(state, ctx, meleeHit.buildingIndex, damage, p);
+            recordMeleeImpact(p, ctx);
+          } else if (meleeHit.kind === 'tree') {
+            // Tree trunks cannot be damaged, but the attack still physically contacts an object.
+            recordMeleeImpact(p, ctx);
           } else if (meleeHit.kind === 'player' && meleeHit.playerId) {
             const target = state.players[meleeHit.playerId];
             if (target && target.invulnerable <= 0) {
               p.meleeHitSeq = (Number(p.meleeHitSeq) || 0) + 1;
               p.meleeHitEventKey = `hit:${ctx.frame}:${p.meleeHitSeq}`;
+              recordMeleeImpact(p, ctx);
               target.health -= damage;
               const targetBody = bodyFromId(world, target.body);
               if (targetBody) {

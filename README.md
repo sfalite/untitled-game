@@ -64,3 +64,10 @@ The build passed a local TypeScript check and isolated tests of normal movement,
 - Removed the compact lower-left control/help HUD that displayed the F4 hitbox hint. F3 diagnostics remain available.
 
 Apply the files together so `sim.ts`, `client/main.ts`, and the supplied audio/image assets remain in sync.
+
+
+## Update v36 — hydrant puddles, melee impact audio, movement
+- Increased authoritative player movement from 5.2 to 5.6 pixels/tick and updated the remote visual-correction speed budget.
+- Improved hydrant-water reliability: immutable spawn coordinates, drawing after building geometry, and a visible blue fallback if `assets/water.png` fails to load. The puddle stays non-colliding and expires after 150 seconds.
+- Added a unified `meleeImpactEventKey` for impacts against destructible props, buildings, tree trunks, and players. `universfield-punch-140236.mp3` now plays on object hits too; `sharp-swing.mp3` remains the swing sound.
+- Bumped deterministic simulation version to 36.

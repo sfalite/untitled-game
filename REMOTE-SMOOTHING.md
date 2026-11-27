@@ -4,7 +4,7 @@ This patch intentionally keeps `predict: 'world'` enabled, as requested. It does
 
 The SDK's world-prediction mode can correct the entire predicted world after rollback/replay. In this mode the SDK warns that remote players may snap when the world is corrected, because remote-player interpolation is not used as it is in `predict: 'self'`.
 
-To reduce visible teleporting without changing prediction mode, the client now applies a display-only position offset to remote player sprites when one screen-frame correction exceeds a movement budget derived from the normal player speed (104 px/s) and elapsed render time. The offset starts at the last position already shown, then decays toward the SDK's new pose with a 160 ms time constant.
+To reduce visible teleporting without changing prediction mode, the client now applies a display-only position offset to remote player sprites when one screen-frame correction exceeds a movement budget derived from the normal player speed (112 px/s) and elapsed render time. The offset starts at the last position already shown, then decays toward the SDK's new pose with a 160 ms time constant.
 
 - The local player is not smoothed; client-side prediction remains immediate.
 - Ordinary remote movement stays unfiltered.
