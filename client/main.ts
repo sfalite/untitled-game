@@ -19,8 +19,8 @@ const COLS = 42;
 const ROWS = 42;
 const WORLD_W = COLS * TILE;
 const WORLD_H = ROWS * TILE;
-const WEAPON_NAMES = ['GLOCK-17', 'AK-47', 'M249', 'M134 MINIGUN', 'SHOTGUN'];
-const WEAPON_COLORS = ['#ffe07a', '#ffd16a', '#ffb347', '#ff8f53', '#fff0b0'];
+const WEAPON_NAMES = ['GLOCK-17', 'AK-47', 'M249', 'M134 MINIGUN', 'SHOTGUN', 'KNIFE'];
+const WEAPON_COLORS = ['#ffe07a', '#ffd16a', '#ffb347', '#ff8f53', '#fff0b0', '#d5e4ed'];
 // Exact local muzzle points in the same orientation as drawWeaponLocal/drawWeaponShape.
 // Keep in sync with sim.ts so a rendered barrel and its authoritative shot share an origin.
 const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 24, 25];
@@ -408,8 +408,11 @@ if (floorMapContext) {
   drawFloorLayer(floorMapContext, 0, 0, WORLD_W, WORLD_H);
 }
 
-function drawWallsLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:number;w:number;h:number}): void {
-  for (const b of BUILDINGS) {
+function drawWallsLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:number;w:number;h:number}, buildingStates?: any[]): void {
+  for (let buildingIndex = 0; buildingIndex < BUILDINGS.length; buildingIndex++) {
+    const b = BUILDINGS[buildingIndex];
+    const buildingState = buildingStates?.[buildingIndex];
+    if (buildingState?.active === false) continue;
     if (b.x + b.w < visible.x || b.x > visible.x + visible.w || b.y + b.h < visible.y || b.y > visible.y + visible.h) continue;
     ctx.fillStyle = 'rgba(22,31,34,.24)'; roundRect(ctx, b.x + 8, b.y + 10, b.w, b.h, 10);
     ctx.fillStyle = '#6c6153'; roundRect(ctx, b.x, b.y, b.w, b.h, 9);
@@ -433,6 +436,16 @@ function drawWallsLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:numb
     }
     ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.lineWidth = 2;
     strokeRoundRect(ctx, b.x + 4, b.y + 4, b.w - 8, b.h - 8, 7);
+    // During gameplay show a compact health bar only after a building has taken damage.
+    if (buildingStates && Number.isFinite(Number(buildingState?.health)) && Number(buildingState.health) < 1000) {
+      const hp = Math.max(0, Math.min(1000, Number(buildingState.health)));
+      const barW = Math.min(86, Math.max(44, b.w - 20));
+      const barX = b.x + (b.w - barW) / 2;
+      const barY = b.y - 9;
+      ctx.fillStyle = 'rgba(13,20,24,.88)'; roundRect(ctx, barX, barY, barW, 5, 2);
+      ctx.fillStyle = hp / 1000 > 0.5 ? '#35d879' : hp / 1000 > 0.25 ? '#f3c84b' : '#ef5b55';
+      roundRect(ctx, barX + 1, barY + 1, Math.max(0, (barW - 2) * hp / 1000), 3, 1.5);
+    }
   }
 }
 function drawTreesLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:number;w:number;h:number}): void {
@@ -562,12 +575,18 @@ function drawWeaponShape(ctx: CanvasRenderingContext2D, weapon: number): void {
     ctx.fillStyle = '#8f989b'; ctx.fillRect(-4, -19, 8, 2);
     ctx.fillStyle = '#252c31'; roundRect(ctx, -4, -5, 8, 6, 1.2);
     ctx.fillStyle = '#9b6134'; roundRect(ctx, -3, 1, 6, 7, 1.5);
-  } else { // Shotgun
+  } else if (weapon === 4) { // Shotgun
     ctx.fillStyle = '#20272b'; roundRect(ctx, -1.7, -29, 3.4, 15, 1.2);
     ctx.fillStyle = '#39454a'; roundRect(ctx, -3.1, -19, 6.2, 6, 1.3);
     ctx.fillStyle = '#252c31'; roundRect(ctx, -3.8, -14, 7.6, 9, 1.5);
     ctx.fillStyle = '#8e5a33'; roundRect(ctx, -3, -6, 6, 12, 1.5);
     ctx.fillStyle = '#a96d39'; ctx.fillRect(-3, 3, 6, 5);
+  } else { // Knife: blade points forward (up in local sprite coordinates).
+    ctx.fillStyle = '#aebdc5'; ctx.strokeStyle = '#e5f0f4'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(3.5, -4); ctx.lineTo(0.8, 0); ctx.lineTo(-3.2, -4); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#333d42'; roundRect(ctx, -2.4, 0, 4.8, 8, 1.2);
+    ctx.fillStyle = '#9b6134'; roundRect(ctx, -2.8, 5, 5.6, 7, 1.4);
+    ctx.fillStyle = '#d9e2e5'; ctx.fillRect(-2.3, 2, 4.6, 1.2);
   }
 }
 function drawWeaponPickup(ctx: CanvasRenderingContext2D, pickup: any): void {
@@ -580,7 +599,7 @@ function drawWeaponPickup(ctx: CanvasRenderingContext2D, pickup: any): void {
   // has a different length, and the Glock's grip is asymmetrical, so use per-weapon bounds.
   const weaponId = Number(pickup.weaponId);
   const centerX = weaponId === 0 ? -1.8 : 0;
-  const centerY = weaponId === 0 ? 3 : weaponId === 1 ? 10.5 : weaponId === 2 ? 11.5 : weaponId === 3 ? 10 : 10.5;
+  const centerY = weaponId === 5 ? -2 : weaponId === 0 ? 3 : weaponId === 1 ? 10.5 : weaponId === 2 ? 11.5 : weaponId === 3 ? 10 : 10.5;
   ctx.translate(centerX, centerY);
   drawWeaponShape(ctx, weaponId);
   ctx.restore();
@@ -588,7 +607,7 @@ function drawWeaponPickup(ctx: CanvasRenderingContext2D, pickup: any): void {
 function drawWeaponLocal(ctx: CanvasRenderingContext2D, weapon: number, scale = 1): void {
   // Move the Glock farther forward along the sprite's local muzzle-up axis. The weapon,
   // muzzle flash and authoritative projectile origin use the same longer forward offset.
-  ctx.save(); ctx.translate(8, weapon === 0 ? -9 : 4); ctx.scale(scale, scale);
+  ctx.save(); ctx.translate(8, weapon === 0 ? -9 : weapon === 5 ? 1 : 4); ctx.scale(scale, scale);
   drawWeaponShape(ctx, weapon);
   ctx.restore();
 }
@@ -809,7 +828,7 @@ function drawCollisionDebugWorld(ctx: CanvasRenderingContext2D, state: any): voi
   ctx.lineWidth = 2;
   // Building collision boxes.
   ctx.strokeStyle = 'rgba(255,82,82,.95)';
-  for (const b of BUILDINGS) ctx.strokeRect(b.x, b.y, b.w, b.h);
+  for (let i = 0; i < BUILDINGS.length; i++) if (state.buildings?.[i]?.active !== false) { const b = BUILDINGS[i]; ctx.strokeRect(b.x, b.y, b.w, b.h); }
   // Tree trunk hitboxes (the canopies are visual only).
   ctx.strokeStyle = 'rgba(255,201,71,.98)';
   for (const t of TREES) { ctx.beginPath(); ctx.arc(t.x, t.y, 7.5, 0, Math.PI * 2); ctx.stroke(); }
@@ -900,7 +919,7 @@ function drawGame(state: any, self: any, playerId: string): void {
   } else {
     drawFloorLayer(ctx, camX, camY, visibleW, visibleH);
   }
-  drawWallsLayer(ctx, visible);
+  drawWallsLayer(ctx, visible, s.buildings);
   for (const p of s.props || []) if (p.active) drawProp(ctx, p);
   for (const pickup of s.pickups || []) drawWeaponPickup(ctx, pickup);
   // World-prediction experiment: state and self represent one predicted world, so draw one list.
@@ -1098,7 +1117,7 @@ function sampleHudMetrics(game: any): void {
   }
 }
 
-function drawMiniMap(ctx: CanvasRenderingContext2D, mine: any): void {
+function drawMiniMap(ctx: CanvasRenderingContext2D, mine: any, buildingStates?: any[]): void {
   // Full-city overview anchored to the lower-right. Only the local player's marker is shown.
   const w = view.width, h = view.height;
   const mapW = keys.touch
@@ -1131,7 +1150,9 @@ function drawMiniMap(ctx: CanvasRenderingContext2D, mine: any): void {
   for (const row of ROAD_ROWS) ctx.fillRect(mapX, mapY + row * TILE * sy, mapW, TILE * sy);
   // Keep the overview intentionally clean: no lane markings, tile borders or grid lines.
 
-  for (const building of BUILDINGS) {
+  for (let i = 0; i < BUILDINGS.length; i++) {
+    if (buildingStates?.[i]?.active === false) continue;
+    const building = BUILDINGS[i];
     ctx.fillStyle = building.color;
     ctx.fillRect(mapX + building.x * sx, mapY + building.y * sy, building.w * sx, building.h * sy);
   }
@@ -1164,7 +1185,7 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#ffffff'; ctx.font = w < 440 ? 'bold 12px system-ui' : 'bold 15px system-ui'; ctx.fillText(`Score  ${mine.score}`, 27, 60);
   ctx.fillStyle = '#c5d3d7'; ctx.font = '11px system-ui'; ctx.fillText(`${Object.keys(state.players || {}).length} PLAYER(S)`, 27, 77);
 
-  // Five-slot inventory. Slot 5 is intentionally empty-handed and never renders a weapon.
+  // Five-slot inventory. Any empty slot is fists; the collectible knife may occupy any free slot.
   const gap = 6;
   const slotW = Math.min(70, (w - 36 - gap * 4) / 5);
   const slotH = 58;
@@ -1200,7 +1221,7 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
 
   if (!keys.touch) {
     ctx.fillStyle = 'rgba(14,25,31,.82)'; roundRect(ctx, 14, h - 38, 292, 24, 8);
-    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · EMPTY SLOT: PUNCH · F3 DIAG · F4 HITBOX', 24, h - 22, 272);
+    ctx.fillStyle = '#f1f5f6'; ctx.font = '10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('E PICK UP · G DROP · EMPTY SLOT: PUNCH · KNIFE: 2X DAMAGE · F3 DIAG · F4 HITBOX', 24, h - 22, 272);
   }
   const nearestWorldPickup = (state.pickups || []).some((pickup: any) => {
     const dx = pickup.x - mine.x, dy = pickup.y - mine.y;
@@ -1211,7 +1232,7 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
     const promptY = h - (keys.touch ? 210 : 72);
     ctx.fillStyle = 'rgba(13,27,30,.90)'; roundRect(ctx, w / 2 - 128, promptY - 17, 256, 25, 8);
     ctx.fillStyle = hasEmptySlot ? '#c9ffe0' : '#ffd6a1'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText(hasEmptySlot ? 'PRESS E TO PICK UP WEAPON' : 'INVENTORY FULL · PRESS G TO DROP', w / 2, promptY);
+    ctx.fillText(hasEmptySlot ? 'PRESS E TO PICK UP ITEM' : 'INVENTORY FULL · PRESS G TO DROP', w / 2, promptY);
   }
   const top = Object.entries(state.players || {}).sort((a: any, b: any) => b[1].score - a[1].score).slice(0, 4);
   const boardH = 28 + top.length * 17;
@@ -1226,7 +1247,7 @@ function drawHud(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
   ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'right'; ctx.fillText(displayedFps > 0 ? String(displayedFps) : '--', metricsX + metricsW - 9, 34);
   ctx.fillStyle = '#9ff4bb'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left'; ctx.fillText('PING / MS', metricsX + 9, 58);
   ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'right'; ctx.fillText(displayedPingMs == null ? '--' : String(displayedPingMs), metricsX + metricsW - 9, 58);
-  drawMiniMap(ctx, mine);
+  drawMiniMap(ctx, mine, state.buildings);
 }
 
 function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, state: any): void {
@@ -1260,6 +1281,9 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   lines.push(`LOCAL (${Math.round(mine.x)}, ${Math.round(mine.y)}) · aim ${Math.round(aimDegrees)}° · HP ${Math.round(mine.health ?? 0)}`);
   lines.push(`DRIFT predicted-confirmed ${netDiagnostics.localDriftPx == null ? '--' : netDiagnostics.localDriftPx.toFixed(1) + ' px'} · players ${Object.keys(state.players || {}).length}`);
   lines.push(`ENTITIES bullets ${(state.bullets || []).length} · pickups ${(state.pickups || []).length} · particles ${(state.particles || []).length} · props ${(state.props || []).filter((p: any) => p.active).length}`);
+  const liveBuildings = (state.buildings || []).filter((b: any) => b.active).length;
+  const damagedBuildings = (state.buildings || []).filter((b: any) => b.active && Number(b.health) < 1000).length;
+  lines.push(`BUILDINGS ${liveBuildings}/${BUILDINGS.length} active · ${damagedBuildings} damaged · HP 1000 · respawn 5m`);
   lines.push(`SHOTS local token ${lastLocalShotTokenRequested || '--'} · fired ${confirmedToken ?? '--'} · resolved ${resolvedToken ?? '--'} · queue ${queued}`);
   lines.push(`FIRE GATE baseline ${localShotTokenBaselineReady ? 'READY' : 'WAIT'} · aim ${aimCameraReady ? 'READY' : 'WAIT'} · click pulse ${pendingMouseFirePulse ? 'PENDING' : 'clear'}`);
   lines.push(`LAST LOCAL SHOT ${lastLocalShotWeapon >= 0 ? WEAPON_NAMES[lastLocalShotWeapon] : '--'} · ${lastLocalShotAt ? ((performance.now() - lastLocalShotAt) / 1000).toFixed(1) + 's ago' : '--'}`);
@@ -1351,6 +1375,9 @@ function buildTiledMap(propsForMap: any[], portableImages: boolean): any {
     nextObjectId++, `Building ${String(i + 1).padStart(2, '0')}`, 'Building', b.x, b.y, b.w, b.h,
     tiledProperties([
       { name: 'collision', type: 'bool', value: true },
+      { name: 'destructible', type: 'bool', value: true },
+      { name: 'initialHP', type: 'int', value: 1000 },
+      { name: 'respawnSeconds', type: 'int', value: 300 },
       { name: 'color', type: 'string', value: b.color },
       { name: 'style', type: 'int', value: b.style },
       { name: 'source', type: 'string', value: 'Chaos City.io BUILDINGS data' },
