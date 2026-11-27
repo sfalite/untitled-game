@@ -46,11 +46,11 @@ const BUILDING_MAX_HP = 1000;
 const BUILDING_RESPAWN_TICKS = 5 * 60 * 20; // Five minutes at 20 simulation ticks per second.
 const WATER_PUDDLE_LIFETIME_TICKS = 120 * 20; // 2 minutes at 20 ticks/s.
 
-// Passive street pedestrians. Their AI is deterministic, uses the room RNG, and does not
-// participate in combat or physics-body ownership; HP is a replicated gameplay/status value.
+// Street pedestrians are deterministic, damageable NPCs with dynamic circular body colliders.
+// Their movement is AI-driven while damage, death and collision outcomes remain authoritative.
 const NPC_COUNT = 16;
 const NPC_MAX_HEALTH = 100;
-const NPC_RADIUS = 10;
+const NPC_RADIUS = 12;
 const NPC_MIN_SPEED = 2.0;
 const NPC_MAX_SPEED = 2.8;
 const NPC_ROAD_COLS = new Set([5, 6, 11, 12, 17, 18, 23, 24, 29, 30, 35, 36, 41]);
@@ -197,9 +197,9 @@ type ShotTraceEvent = {
   pelletIndex: number; x: number; y: number; target: string; detail: string; angle?: number;
 };
 type StreetNpc = {
-  id: number; x: number; y: number; prevX: number; prevY: number; angle: number;
+  id: number; active: boolean; body: number; x: number; y: number; prevX: number; prevY: number; angle: number;
   speed: number; health: number; maxHealth: number; path: number[]; pathIndex: number;
-  goalTicks: number; stuckTicks: number; walkPhase: number;
+  goalTicks: number; stuckTicks: number; walkPhase: number; deathSeq: number; deathX: number; deathY: number;
 };
 type State = {
   players: Record<string, Player>; npcs: StreetNpc[]; nextNpcId: number;
@@ -352,6 +352,32 @@ function makePlayerBody(world: any, x: number, y: number): number {
   body.setAngularDamping(12);
   return bodyId(world, body);
 }
+function makeStreetNpcBody(world: any, npc: StreetNpc): number {
+  // Dynamic circle: players and pedestrians collide in both directions. The route AI drives its
+  // velocity, while Planck resolves contacts and the actual body position is copied back to state.
+  const body = world.createBody({
+    type: 'dynamic',
+    position: pl.Vec2(npc.x / PPM, npc.y / PPM),
+    angle: npc.angle + Math.PI / 2,
+  });
+  body.createFixture(pl.Circle(NPC_RADIUS / PPM), { density: 0.6, friction: 0.72, restitution: 0.02 });
+  body.setFixedRotation(true);
+  body.setLinearDamping(0.05);
+  body.setAngularDamping(12);
+  return bodyId(world, body);
+}
+function syncStreetNpcStates(state: State, world: any): void {
+  for (const npc of state.npcs || []) {
+    if (!npc.active || npc.body < 0) continue;
+    const body = bodyFromId(world, npc.body);
+    if (!body) continue;
+    // Copy the physics-resolved pose back so sprite, swept bullet collision and hitbox agree,
+    // including when a player pushes an NPC during the same simulation frame.
+    const pos = body.getPosition();
+    npc.x = pos.x * PPM;
+    npc.y = pos.y * PPM;
+  }
+}
 function propPhysics(kind: PropKind): { hx:number;hy:number;density:number;friction:number;bounce:number } {
   // Half-extents match the rendered object's actual width/height in world pixels.
   if (kind === 'car') return {hx:46,hy:22,density:2.4,friction:0.82,bounce:0.03};         // 92x44; parked vehicles are not player-drivable
@@ -401,11 +427,12 @@ function streetNpcPointBlocked(state: State, x: number, y: number, npcId: number
   if (streetNpcStaticBlocked(state, x, y)) return true;
   for (const player of Object.values(state.players || {})) {
     const dx = x - player.x, dy = y - player.y;
-    const r = NPC_RADIUS + 24;
+    // Let pedestrians approach players; the dynamic body solver prevents overlap physically.
+    const r = NPC_RADIUS + 6;
     if (dx * dx + dy * dy < r * r) return true;
   }
   for (const other of state.npcs || []) {
-    if (other.id === npcId) continue;
+    if (!other.active || other.id === npcId) continue;
     const dx = x - other.x, dy = y - other.y, r = NPC_RADIUS * 2 + 5;
     if (dx * dx + dy * dy < r * r) return true;
   }
@@ -465,7 +492,10 @@ function chooseStreetNpcRoute(state: State, npc: StreetNpc, ctx: any): void {
   }
   const startPoint = streetNpcPoint(startId);
   let selectedPath: number[] = [];
-  for (let attempt = 0; attempt < 28; attempt++) {
+  // Bound initialization cost: a room may create 16 NPCs at once. Two deterministic BFS
+  // attempts are enough for the mostly connected road grid; a failed NPC retries after 30 ticks
+  // instead of scanning every waypoint synchronously during room creation.
+  for (let attempt = 0; attempt < 2; attempt++) {
     const goalId = NPC_WAYPOINTS[Math.floor(ctx.rng() * NPC_WAYPOINTS.length)];
     const goalPoint = streetNpcPoint(goalId);
     const dx = goalPoint.x - startPoint.x, dy = goalPoint.y - startPoint.y;
@@ -474,11 +504,8 @@ function chooseStreetNpcRoute(state: State, npc: StreetNpc, ctx: any): void {
     if (candidate.length >= 4) { selectedPath = candidate; break; }
   }
   if (!selectedPath.length) {
-    // A deterministic fallback picks the first nearby reachable node along the road grid.
-    for (const goalId of NPC_WAYPOINTS) {
-      const candidate = streetNpcPath(state, startId, goalId);
-      if (candidate.length >= 2) { selectedPath = candidate; break; }
-    }
+    npc.path = []; npc.pathIndex = 0; npc.goalTicks = 30; npc.stuckTicks = 0;
+    return;
   }
   npc.path = selectedPath;
   if (selectedPath.length > 1) {
@@ -510,33 +537,42 @@ function createStreetNpcs(state: State, ctx: any): StreetNpc[] {
     }
     if (!spawn) continue;
     const npc: StreetNpc = {
-      id: state.nextNpcId++, x: spawn.x, y: spawn.y, prevX: spawn.x, prevY: spawn.y,
+      id: state.nextNpcId++, active: true, body: -1, x: spawn.x, y: spawn.y, prevX: spawn.x, prevY: spawn.y,
       angle: Math.PI / 2, speed: NPC_MIN_SPEED + ctx.rng() * (NPC_MAX_SPEED - NPC_MIN_SPEED),
       health: NPC_MAX_HEALTH, maxHealth: NPC_MAX_HEALTH, path: [], pathIndex: 0,
-      goalTicks: 0, stuckTicks: 0, walkPhase: ctx.rng() * Math.PI * 2,
+      goalTicks: 0, stuckTicks: 0, walkPhase: ctx.rng() * Math.PI * 2, deathSeq: 0, deathX: spawn.x, deathY: spawn.y,
     };
     npcs.push(npc);
     state.npcs = npcs;
+    npc.body = makeStreetNpcBody(ctx.physics, npc);
     chooseStreetNpcRoute(state, npc, ctx);
   }
   return npcs;
 }
 function updateStreetNpcs(state: State, ctx: any): void {
+  const world: any = ctx.physics;
   for (const npc of state.npcs || []) {
+    if (!npc.active || npc.health <= 0) continue;
     npc.prevX = npc.x; npc.prevY = npc.y;
     npc.walkPhase = (npc.walkPhase + npc.speed * 0.12) % (Math.PI * 2);
     npc.goalTicks--;
-    // If no clear route exists, wait for the retry timer instead of running pathfinding every tick.
     if (npc.goalTicks <= 0 || (npc.path.length > 0 && npc.pathIndex >= npc.path.length)) {
       chooseStreetNpcRoute(state, npc, ctx);
     }
+    const body = npc.body >= 0 ? bodyFromId(world, npc.body) : null;
+    if (!body) continue;
     const targetId = npc.path[npc.pathIndex];
-    if (targetId == null) continue;
+    if (targetId == null) {
+      body.setLinearVelocity(pl.Vec2(0, 0));
+      continue;
+    }
     const target = streetNpcPoint(targetId);
     const dx = target.x - npc.x, dy = target.y - npc.y;
     const distance = Math.hypot(dx, dy);
     if (distance <= npc.speed + 1) {
-      npc.x = target.x; npc.y = target.y; npc.pathIndex++; npc.stuckTicks = 0;
+      body.setLinearVelocity(pl.Vec2(0, 0));
+      npc.pathIndex++;
+      npc.stuckTicks = 0;
       if (npc.pathIndex >= npc.path.length) chooseStreetNpcRoute(state, npc, ctx);
       continue;
     }
@@ -545,11 +581,20 @@ function updateStreetNpcs(state: State, ctx: any): void {
     const nextX = npc.x + Math.cos(desiredAngle) * npc.speed;
     const nextY = npc.y + Math.sin(desiredAngle) * npc.speed;
     if (streetNpcPointBlocked(state, nextX, nextY, npc.id)) {
+      body.setLinearVelocity(pl.Vec2(0, 0));
       npc.stuckTicks++;
       if (npc.stuckTicks >= 10) chooseStreetNpcRoute(state, npc, ctx);
       continue;
     }
-    npc.x = nextX; npc.y = nextY; npc.stuckTicks = 0;
+    // Apply AI intent as velocity and let the shared Planck world resolve collisions rather than
+    // teleporting NPC coordinates directly through players or obstacles.
+    body.setTransform(body.getPosition(), npc.angle + Math.PI / 2);
+    body.setLinearVelocity(pl.Vec2(
+      Math.cos(desiredAngle) * npc.speed * ctx.tickRate / PPM,
+      Math.sin(desiredAngle) * npc.speed * ctx.tickRate / PPM,
+    ));
+    body.setAngularVelocity(0);
+    npc.stuckTicks = 0;
   }
 }
 
@@ -647,14 +692,15 @@ function segmentEntryOrientedBox(x0: number, y0: number, x1: number, y1: number,
   return segmentEntryAabb(lx0, ly0, lx1, ly1,
     -hx - BULLET_RADIUS, -hy - BULLET_RADIUS, hx + BULLET_RADIUS, hy + BULLET_RADIUS);
 }
-function particleColors(kind: PropKind | 'building'): string[] {
+function particleColors(kind: PropKind | 'building' | 'npc'): string[] {
+  if (kind === 'npc') return ['#1676ef', '#3fa0ff', '#9ccaff', '#dceeff'];
   if (kind === 'car') return ['#e66a25','#454c52','#9dcbd2','#c0cbd0'];
   if (kind === 'bench' || kind === 'crate') return ['#b77b43','#dba05f','#80512f','#e6b975'];
   if (kind === 'bin') return ['#299c6f','#45ce8b','#d6e3cf'];
   if (kind === 'hydrant' || kind === 'cone') return ['#f17b31','#d95127','#ffe0a2'];
   return ['#d3d6d2','#899a9c','#e7c58b'];
 }
-function addParticles(state: State, ctx: any, x: number, y: number, kind: PropKind | 'building', count = 10): void {
+function addParticles(state: State, ctx: any, x: number, y: number, kind: PropKind | 'building' | 'npc', count = 10): void {
   const world = ctx.physics;
   const colors = particleColors(kind);
   for (let i = 0; i < count; i++) {
@@ -743,6 +789,23 @@ function damageProp(state: State, ctx: any, prop: Prop, damage: number, player: 
   }
   return false;
 }
+function damageStreetNpc(state: State, ctx: any, npcId: number, damage: number, player: Player | null): boolean {
+  const npc = state.npcs.find((candidate) => candidate.id === npcId);
+  if (!npc || !npc.active || damage <= 0) return false;
+  npc.health = Math.max(0, npc.health - damage);
+  if (npc.health <= 0) {
+    npc.active = false;
+    npc.deathX = npc.x;
+    npc.deathY = npc.y;
+    npc.deathSeq++;
+    destroyBody(ctx, npc.body);
+    npc.body = -1;
+    if (player) player.score += 10;
+    addParticles(state, ctx, npc.deathX, npc.deathY, 'npc', 8);
+    return true;
+  }
+  return false;
+}
 function damageBuilding(state: State, ctx: any, index: number, damage: number, player: Player | null): boolean {
   const building = state.buildings[index];
   const rect = BUILDINGS[index];
@@ -799,7 +862,7 @@ function recordShotTrace(
 
 export default defineSim({
   name: 'chaos-city',
-  version: '38',
+  version: '40',
   tickRate: 20,
   maxPlayers: 32,
   // Keep world prediction enabled so player poses, weapons, bullets, and collisions share one
@@ -982,7 +1045,11 @@ export default defineSim({
       if (!prop.active) continue;
       prop.prevX = prop.x; prop.prevY = prop.y; prop.prevAngle = prop.angle || 0;
     }
+    // NPC AI sets velocity before the shared physics step. Players and NPCs have dynamic bodies,
+    // so the solver resolves contact instead of allowing either sprite to pass through the other.
+    updateStreetNpcs(state, ctx);
     world.step(1 / ctx.tickRate, 8, 3);
+    syncStreetNpcStates(state, world);
 
     // Synchronise pixel-space game state to physics world poses after the deterministic world step.
     for (const id of Object.keys(state.players).sort()) {
@@ -1013,10 +1080,6 @@ export default defineSim({
       else destroyBody(ctx, particle.body);
     }
     state.particles = liveParticles;
-
-    // Passive civilians walk along street waypoints in the same deterministic shared step.
-    // They are non-combat background NPCs in this update: no weapon target or physics body is added.
-    updateStreetNpcs(state, ctx);
 
     // Inventory actions are authoritative and happen in the ordered simulation frame.
     // A pickup is removed only after an empty slot has been found and filled.
@@ -1066,11 +1129,11 @@ export default defineSim({
         const fx = Math.cos(p.aimAngle), fy = Math.sin(p.aimAngle);
         const damage = hasKnife ? KNIFE_DAMAGE : PUNCH_DAMAGE;
         const endX = p.x + fx * PUNCH_RANGE, endY = p.y + fy * PUNCH_RANGE;
-        type MeleeHit = { t: number; kind: 'building' | 'tree' | 'prop' | 'player'; buildingIndex?: number; prop?: Prop; playerId?: string };
+        type MeleeHit = { t: number; kind: 'building' | 'tree' | 'prop' | 'player' | 'npc'; buildingIndex?: number; prop?: Prop; playerId?: string; npcId?: number };
         let meleeHit: MeleeHit | null = null;
-        const considerMelee = (t: number | null, kind: MeleeHit['kind'], buildingIndex?: number, prop?: Prop, playerId?: string) => {
+        const considerMelee = (t: number | null, kind: MeleeHit['kind'], buildingIndex?: number, prop?: Prop, playerId?: string, npcId?: number) => {
           if (t == null || !Number.isFinite(t)) return;
-          if (!meleeHit || t < meleeHit.t - 1e-7) meleeHit = { t, kind, buildingIndex, prop, playerId };
+          if (!meleeHit || t < meleeHit.t - 1e-7) meleeHit = { t, kind, buildingIndex, prop, playerId, npcId };
         };
         for (let bi = 0; bi < BUILDINGS.length; bi++) {
           if (state.buildings[bi]?.active === false) continue;
@@ -1086,6 +1149,21 @@ export default defineSim({
           const cfg = propPhysics(prop.kind);
           considerMelee(segmentEntryOrientedBox(p.x - prop.x, p.y - prop.y,
             endX - prop.x, endY - prop.y, 0, 0, prop.angle || 0, cfg.hx + 4, cfg.hy + 4), 'prop', undefined, prop);
+        }
+        // Pedestrians can be contacted by the empty-hand melee action. This branch is
+        // intentionally unavailable while a weapon is equipped.
+        if (!hasKnife) {
+          for (const npc of state.npcs) {
+            if (!npc.active || npc.health <= 0) continue;
+            const prevX = Number.isFinite(npc.prevX) ? npc.prevX : npc.x;
+            const prevY = Number.isFinite(npc.prevY) ? npc.prevY : npc.y;
+            const t = segmentEntryOrientedBox(
+              p.x - prevX, p.y - prevY,
+              endX - npc.x, endY - npc.y,
+              0, 0, npc.angle + Math.PI / 2, 21.5, 16.5,
+            );
+            considerMelee(t, 'npc', undefined, undefined, undefined, npc.id);
+          }
         }
         for (const targetId of Object.keys(state.players).sort()) {
           if (targetId === id) continue;
@@ -1106,6 +1184,9 @@ export default defineSim({
             recordMeleeImpact(p, ctx);
           } else if (meleeHit.kind === 'tree') {
             // Tree trunks cannot be damaged, but the attack still physically contacts an object.
+            recordMeleeImpact(p, ctx);
+          } else if (meleeHit.kind === 'npc' && typeof meleeHit.npcId === 'number') {
+            damageStreetNpc(state, ctx, meleeHit.npcId, damage, p);
             recordMeleeImpact(p, ctx);
           } else if (meleeHit.kind === 'player' && meleeHit.playerId) {
             const target = state.players[meleeHit.playerId];
@@ -1254,11 +1335,11 @@ export default defineSim({
       // time-of-impact, not by category/list order. Previously a distant prop in the props array
       // could absorb a bullet before a nearer player, or a wall farther down the ray could prevent
       // damage to a target standing in front of it.
-      type Hit = { t: number; kind: 'building' | 'tree' | 'prop' | 'player'; prop?: Prop; playerId?: string; buildingIndex?: number };
+      type Hit = { t: number; kind: 'building' | 'tree' | 'prop' | 'player' | 'npc'; prop?: Prop; playerId?: string; buildingIndex?: number; npcId?: number };
       let hit: Hit | null = null;
-      const consider = (t: number | null, kind: Hit['kind'], prop?: Prop, playerId?: string, buildingIndex?: number) => {
+      const consider = (t: number | null, kind: Hit['kind'], prop?: Prop, playerId?: string, buildingIndex?: number, npcId?: number) => {
         if (t == null || !Number.isFinite(t)) return;
-        if (!hit || t < hit.t - 1e-7) hit = { t, kind, prop, playerId, buildingIndex };
+        if (!hit || t < hit.t - 1e-7) hit = { t, kind, prop, playerId, buildingIndex, npcId };
       };
       for (let buildingIndex = 0; buildingIndex < BUILDINGS.length; buildingIndex++) {
         if (state.buildings[buildingIndex]?.active === false) continue;
@@ -1277,6 +1358,19 @@ export default defineSim({
         const prevY = Number.isFinite(prop.prevY) ? prop.prevY : prop.y;
         consider(segmentEntryOrientedBox(x0 - prevX, y0 - prevY,
           x1 - prop.x, y1 - prop.y, 0, 0, prop.angle || prop.prevAngle || 0, cfg.hx, cfg.hy), 'prop', prop);
+      }
+      // NPCs are valid projectile targets. Use a swept collision in target-relative space so
+      // fast bullets cannot tunnel through a moving pedestrian between 20 Hz simulation frames.
+      for (const npc of state.npcs || []) {
+        if (!npc.active || npc.health <= 0) continue;
+        const prevX = Number.isFinite(npc.prevX) ? npc.prevX : npc.x;
+        const prevY = Number.isFinite(npc.prevY) ? npc.prevY : npc.y;
+        const t = segmentEntryOrientedBox(
+          x0 - prevX, y0 - prevY,
+          x1 - npc.x, y1 - npc.y,
+          0, 0, npc.angle + Math.PI / 2, 21.5 + BULLET_RADIUS, 16.5 + BULLET_RADIUS,
+        );
+        consider(t, 'npc', undefined, undefined, undefined, npc.id);
       }
       for (const targetId of Object.keys(state.players).sort()) {
         if (targetId === b.owner) continue;
@@ -1298,11 +1392,13 @@ export default defineSim({
         b.y = y0 + (y1 - y0) * hit.t;
         const impactTarget = hit.kind === 'player'
           ? `player:${hit.playerId || 'unknown'}`
-          : hit.kind === 'prop' && hit.prop
-            ? `prop:${hit.prop.kind}#${hit.prop.id}`
-            : hit.kind === 'building' && typeof hit.buildingIndex === 'number'
-              ? `building:${hit.buildingIndex}`
-              : hit.kind;
+          : hit.kind === 'npc' && typeof hit.npcId === 'number'
+            ? `npc:${hit.npcId}`
+            : hit.kind === 'prop' && hit.prop
+              ? `prop:${hit.prop.kind}#${hit.prop.id}`
+              : hit.kind === 'building' && typeof hit.buildingIndex === 'number'
+                ? `building:${hit.buildingIndex}`
+                : hit.kind;
         recordShotTrace(state, ctx, {
           kind: 'hit', owner: b.owner, token: b.shotToken, weaponId: b.weaponId, pelletIndex: b.pelletIndex,
           x: b.x, y: b.y, target: impactTarget, detail: 'first collision; projectile stopped',
@@ -1311,6 +1407,8 @@ export default defineSim({
           damageProp(state, ctx, hit.prop, b.damage, state.players[b.owner] || null);
         } else if (hit.kind === 'building' && typeof hit.buildingIndex === 'number') {
           damageBuilding(state, ctx, hit.buildingIndex, b.damage, state.players[b.owner] || null);
+        } else if (hit.kind === 'npc' && typeof hit.npcId === 'number') {
+          damageStreetNpc(state, ctx, hit.npcId, b.damage, state.players[b.owner] || null);
         } else if (hit.kind === 'player' && hit.playerId) {
           const target = state.players[hit.playerId];
           if (target && target.invulnerable <= 0) {
@@ -1337,7 +1435,7 @@ export default defineSim({
             }
           }
         }
-        // Walls, trees, props, and players all stop the projectile, even during spawn protection.
+        // Walls, trees, props, NPCs, and players all stop the projectile at the first impact.
         continue;
       }
       liveBullets.push(b);

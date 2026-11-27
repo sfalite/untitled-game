@@ -97,3 +97,16 @@ All held firearms and the knife are moved 20 world pixels farther forward from t
 - Each NPC has replicated 100 HP, displays a small health bar, walks between street waypoints, and avoids static obstacles and nearby players/NPCs.
 - This update keeps NPCs non-combat background civilians: it does not add weapon targeting, attacks, or extra physics bodies for them.
 - Local regression checks: `npm run test:npcs`.
+
+## Update v41 — NPC damage, solid collisions, death audio and faster room startup
+- NPCs use dynamic circular Planck bodies. Their AI sets desired velocity before the shared physics step, then the authoritative NPC position is copied back from the physics-resolved body; player/NPC contacts are resolved by the same world step.
+- Swept projectile collision now includes NPC targets using the moving NPC's previous/current pose and a rotated 43×33 sprite-sized hitbox. A hit stops the projectile and subtracts the weapon's configured damage from the NPC's 100 HP.
+- When an NPC reaches 0 HP, its body is removed, the death coordinates and `deathSeq` are stored, and clients play `assets/audio/man_scream1.mp3` spatially at that location using the existing shared death-audio helper.
+- Route initialization is bounded to two deterministic pathfinding attempts and removes the exhaustive fallback scan. If a route cannot be found, that NPC retries after 30 simulation ticks instead of blocking room initialization with repeated searches.
+- Kept `predict: 'world'`, all existing weapons, knife/fists, water, buildings, inventory, HUD and the user's NPC sprite. Simulation version is now `40` to distinguish the authoritative physics/state change.
+
+### v41 validation status
+- `npm run test:npcs` passed.
+- All local regression scripts passed: NPC, projectile/death audio, held-item offsets, water-layer/bench, and water-puddle.
+- TypeScript source check passed with temporary declarations for the unavailable modd.io SDK packages.
+- The official `npx moddio test` and a live modd.io multiplayer room were not run from this workspace; verify NPC hits, physical blocking, and positional scream in the actual modd.io room before publishing.
