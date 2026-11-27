@@ -46,6 +46,19 @@ const BUILDING_MAX_HP = 1000;
 const BUILDING_RESPAWN_TICKS = 5 * 60 * 20; // Five minutes at 20 simulation ticks per second.
 const WATER_PUDDLE_LIFETIME_TICKS = 120 * 20; // 2 minutes at 20 ticks/s.
 
+// Passive street pedestrians. Their AI is deterministic, uses the room RNG, and does not
+// participate in combat or physics-body ownership; HP is a replicated gameplay/status value.
+const NPC_COUNT = 16;
+const NPC_MAX_HEALTH = 100;
+const NPC_RADIUS = 10;
+const NPC_MIN_SPEED = 2.0;
+const NPC_MAX_SPEED = 2.8;
+const NPC_ROAD_COLS = new Set([5, 6, 11, 12, 17, 18, 23, 24, 29, 30, 35, 36, 41]);
+const NPC_ROAD_ROWS = new Set([5, 6, 11, 12, 17, 18, 23, 24, 29, 30, 35, 36, 41]);
+const NPC_WAYPOINTS: number[] = Array.from({ length: COLS * ROWS }, (_unused, id) => id)
+  .filter((id) => NPC_ROAD_COLS.has(id % COLS) || NPC_ROAD_ROWS.has(Math.floor(id / COLS)));
+const NPC_WAYPOINT_SET = new Set(NPC_WAYPOINTS);
+
 // Planck keeps contact/broad-phase history, so rebuild its canonical world periodically.
 const box2dPhysics: any = planck({ gravity: { x: 0, y: 0 } });
 box2dPhysics.canonicalEvery = 100;
@@ -183,8 +196,14 @@ type ShotTraceEvent = {
   id: number; frame: number; kind: ShotTraceKind; owner: string; token: number; weaponId: number;
   pelletIndex: number; x: number; y: number; target: string; detail: string; angle?: number;
 };
+type StreetNpc = {
+  id: number; x: number; y: number; prevX: number; prevY: number; angle: number;
+  speed: number; health: number; maxHealth: number; path: number[]; pathIndex: number;
+  goalTicks: number; stuckTicks: number; walkPhase: number;
+};
 type State = {
-  players: Record<string, Player>; buildings: BuildingState[]; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[]; waterPuddles: WaterPuddle[];
+  players: Record<string, Player>; npcs: StreetNpc[]; nextNpcId: number;
+  buildings: BuildingState[]; props: Prop[]; pickups: WeaponPickup[]; bullets: Bullet[]; particles: Particle[]; waterPuddles: WaterPuddle[];
   shotTrace: ShotTraceEvent[]; nextShotTraceId: number;
   nextBulletId: number; nextParticleId: number; nextPickupId: number; nextWaterPuddleId: number;
 };
@@ -356,6 +375,184 @@ function propRadius(kind: PropKind): number {
   const cfg = propPhysics(kind);
   return Math.sqrt(cfg.hx * cfg.hx + cfg.hy * cfg.hy);
 }
+
+function streetNpcPoint(id: number): { x: number; y: number } {
+  return { x: ((id % COLS) + 0.5) * TILE, y: (Math.floor(id / COLS) + 0.5) * TILE };
+}
+function streetNpcStaticBlocked(state: State, x: number, y: number): boolean {
+  if (x < NPC_RADIUS + 2 || y < NPC_RADIUS + 2 || x > W - NPC_RADIUS - 2 || y > H - NPC_RADIUS - 2) return true;
+  if (BUILDINGS.some((building, i) => state.buildings[i]?.active !== false && circleHitsRect(x, y, NPC_RADIUS, building))) return true;
+  for (const tree of TREES) {
+    const dx = x - tree.x, dy = y - tree.y, r = NPC_RADIUS + tree.r;
+    if (dx * dx + dy * dy < r * r) return true;
+  }
+  for (const prop of state.props || []) {
+    if (!prop.active) continue;
+    const cfg = propPhysics(prop.kind);
+    const angle = prop.angle || 0;
+    const dx = x - prop.x, dy = y - prop.y;
+    const localX = dx * Math.cos(angle) + dy * Math.sin(angle);
+    const localY = -dx * Math.sin(angle) + dy * Math.cos(angle);
+    if (Math.abs(localX) < cfg.hx + NPC_RADIUS && Math.abs(localY) < cfg.hy + NPC_RADIUS) return true;
+  }
+  return false;
+}
+function streetNpcPointBlocked(state: State, x: number, y: number, npcId: number): boolean {
+  if (streetNpcStaticBlocked(state, x, y)) return true;
+  for (const player of Object.values(state.players || {})) {
+    const dx = x - player.x, dy = y - player.y;
+    const r = NPC_RADIUS + 24;
+    if (dx * dx + dy * dy < r * r) return true;
+  }
+  for (const other of state.npcs || []) {
+    if (other.id === npcId) continue;
+    const dx = x - other.x, dy = y - other.y, r = NPC_RADIUS * 2 + 5;
+    if (dx * dx + dy * dy < r * r) return true;
+  }
+  return false;
+}
+function streetNpcEdgeClear(state: State, fromId: number, toId: number): boolean {
+  const a = streetNpcPoint(fromId), b = streetNpcPoint(toId);
+  // Endpoints are checked by the pathfinder; the midpoint catches props across this 64px edge.
+  // One deterministic sample keeps route planning light when the room initializes 16 walkers.
+  return !streetNpcStaticBlocked(state, (a.x + b.x) / 2, (a.y + b.y) / 2);
+}
+function streetNpcPath(state: State, startId: number, goalId: number): number[] {
+  if (!NPC_WAYPOINT_SET.has(startId) || !NPC_WAYPOINT_SET.has(goalId)) return [];
+  const previous = new Int32Array(COLS * ROWS);
+  previous.fill(-2);
+  const start = streetNpcPoint(startId), goal = streetNpcPoint(goalId);
+  if (streetNpcStaticBlocked(state, start.x, start.y) || streetNpcStaticBlocked(state, goal.x, goal.y)) return [];
+  const queue: number[] = [startId];
+  previous[startId] = -1;
+  for (let head = 0; head < queue.length; head++) {
+    const current = queue[head];
+    if (current === goalId) break;
+    const col = current % COLS, row = Math.floor(current / COLS);
+    // Fixed neighbour order keeps route choice deterministic across all clients.
+    const neighbours = [row > 0 ? current - COLS : -1, col < COLS - 1 ? current + 1 : -1,
+      row < ROWS - 1 ? current + COLS : -1, col > 0 ? current - 1 : -1];
+    for (const next of neighbours) {
+      if (next < 0 || previous[next] !== -2 || !NPC_WAYPOINT_SET.has(next)) continue;
+      const point = streetNpcPoint(next);
+      if (streetNpcStaticBlocked(state, point.x, point.y) || !streetNpcEdgeClear(state, current, next)) continue;
+      previous[next] = current;
+      queue.push(next);
+    }
+  }
+  if (previous[goalId] === -2) return [];
+  const path: number[] = [];
+  for (let at = goalId; at !== -1; at = previous[at]) path.push(at);
+  path.reverse();
+  return path;
+}
+function nearestStreetNpcNode(state: State, npc: StreetNpc, includeCharacters: boolean): number {
+  let bestId = -1, bestDistance = Number.POSITIVE_INFINITY;
+  for (const id of NPC_WAYPOINTS) {
+    const point = streetNpcPoint(id);
+    if (streetNpcStaticBlocked(state, point.x, point.y)) continue;
+    if (includeCharacters && streetNpcPointBlocked(state, point.x, point.y, npc.id)) continue;
+    const dx = point.x - npc.x, dy = point.y - npc.y, distance = dx * dx + dy * dy;
+    if (distance < bestDistance) { bestDistance = distance; bestId = id; }
+  }
+  return bestId;
+}
+function chooseStreetNpcRoute(state: State, npc: StreetNpc, ctx: any): void {
+  const startId = nearestStreetNpcNode(state, npc, true);
+  if (startId < 0) {
+    npc.path = []; npc.pathIndex = 0; npc.goalTicks = 30; npc.stuckTicks = 0;
+    return;
+  }
+  const startPoint = streetNpcPoint(startId);
+  let selectedPath: number[] = [];
+  for (let attempt = 0; attempt < 28; attempt++) {
+    const goalId = NPC_WAYPOINTS[Math.floor(ctx.rng() * NPC_WAYPOINTS.length)];
+    const goalPoint = streetNpcPoint(goalId);
+    const dx = goalPoint.x - startPoint.x, dy = goalPoint.y - startPoint.y;
+    if (dx * dx + dy * dy < 220 * 220) continue;
+    const candidate = streetNpcPath(state, startId, goalId);
+    if (candidate.length >= 4) { selectedPath = candidate; break; }
+  }
+  if (!selectedPath.length) {
+    // A deterministic fallback picks the first nearby reachable node along the road grid.
+    for (const goalId of NPC_WAYPOINTS) {
+      const candidate = streetNpcPath(state, startId, goalId);
+      if (candidate.length >= 2) { selectedPath = candidate; break; }
+    }
+  }
+  npc.path = selectedPath;
+  if (selectedPath.length > 1) {
+    const firstWaypoint = streetNpcPoint(selectedPath[0]);
+    const distanceToStart = Math.hypot(firstWaypoint.x - npc.x, firstWaypoint.y - npc.y);
+    // If replanning while mid-road, walk back to the closest waypoint before following the path.
+    npc.pathIndex = distanceToStart <= npc.speed + 1 ? 1 : 0;
+  } else {
+    npc.pathIndex = 0;
+  }
+  npc.goalTicks = 300 + Math.floor(ctx.rng() * 260);
+  npc.stuckTicks = 0;
+}
+function createStreetNpcs(state: State, ctx: any): StreetNpc[] {
+  const npcs: StreetNpc[] = [];
+  // Spawn pedestrians only on clear road tiles and keep their starting positions separated.
+  for (let i = 0; i < NPC_COUNT; i++) {
+    let spawn: { x: number; y: number } | null = null;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const waypoint = NPC_WAYPOINTS[Math.floor(ctx.rng() * NPC_WAYPOINTS.length)];
+      const point = streetNpcPoint(waypoint);
+      if (streetNpcStaticBlocked(state, point.x, point.y)) continue;
+      if (npcs.some((other) => {
+        const dx = point.x - other.x, dy = point.y - other.y;
+        return dx * dx + dy * dy < 56 * 56;
+      })) continue;
+      spawn = point;
+      break;
+    }
+    if (!spawn) continue;
+    const npc: StreetNpc = {
+      id: state.nextNpcId++, x: spawn.x, y: spawn.y, prevX: spawn.x, prevY: spawn.y,
+      angle: Math.PI / 2, speed: NPC_MIN_SPEED + ctx.rng() * (NPC_MAX_SPEED - NPC_MIN_SPEED),
+      health: NPC_MAX_HEALTH, maxHealth: NPC_MAX_HEALTH, path: [], pathIndex: 0,
+      goalTicks: 0, stuckTicks: 0, walkPhase: ctx.rng() * Math.PI * 2,
+    };
+    npcs.push(npc);
+    state.npcs = npcs;
+    chooseStreetNpcRoute(state, npc, ctx);
+  }
+  return npcs;
+}
+function updateStreetNpcs(state: State, ctx: any): void {
+  for (const npc of state.npcs || []) {
+    npc.prevX = npc.x; npc.prevY = npc.y;
+    npc.walkPhase = (npc.walkPhase + npc.speed * 0.12) % (Math.PI * 2);
+    npc.goalTicks--;
+    // If no clear route exists, wait for the retry timer instead of running pathfinding every tick.
+    if (npc.goalTicks <= 0 || (npc.path.length > 0 && npc.pathIndex >= npc.path.length)) {
+      chooseStreetNpcRoute(state, npc, ctx);
+    }
+    const targetId = npc.path[npc.pathIndex];
+    if (targetId == null) continue;
+    const target = streetNpcPoint(targetId);
+    const dx = target.x - npc.x, dy = target.y - npc.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= npc.speed + 1) {
+      npc.x = target.x; npc.y = target.y; npc.pathIndex++; npc.stuckTicks = 0;
+      if (npc.pathIndex >= npc.path.length) chooseStreetNpcRoute(state, npc, ctx);
+      continue;
+    }
+    const desiredAngle = Math.atan2(dy, dx);
+    npc.angle = unwrapAngleNear(npc.angle, desiredAngle);
+    const nextX = npc.x + Math.cos(desiredAngle) * npc.speed;
+    const nextY = npc.y + Math.sin(desiredAngle) * npc.speed;
+    if (streetNpcPointBlocked(state, nextX, nextY, npc.id)) {
+      npc.stuckTicks++;
+      if (npc.stuckTicks >= 10) chooseStreetNpcRoute(state, npc, ctx);
+      continue;
+    }
+    npc.x = nextX; npc.y = nextY; npc.stuckTicks = 0;
+  }
+}
+
 // Swept segment collision prevents fast bullets (especially the M134) from tunnelling
 // through a player or a small object between two 20 Hz simulation frames.
 const BULLET_RADIUS = 3;
@@ -602,7 +799,7 @@ function recordShotTrace(
 
 export default defineSim({
   name: 'chaos-city',
-  version: '37',
+  version: '38',
   tickRate: 20,
   maxPlayers: 32,
   // Keep world prediction enabled so player poses, weapons, bullets, and collisions share one
@@ -634,11 +831,13 @@ export default defineSim({
     makeMapPhysics(world, buildings);
     const props: Prop[] = PROP_SEEDS.map((p, i) => ({ id: i, ...p, mapX: p.x, mapY: p.y, prevX: p.x, prevY: p.y, prevAngle: 0, variant: p.variant ?? (i % 6), active: true, respawnAt: 0, body: -1, angle: 0, health: propMaxHealth(p.kind) }));
     for (const prop of props) prop.body = makePropBody(world, prop);
-    return {
-      players: {}, buildings, props, pickups: [], bullets: [], particles: [], waterPuddles: [],
+    const state: State = {
+      players: {}, npcs: [], nextNpcId: 1, buildings, props, pickups: [], bullets: [], particles: [], waterPuddles: [],
       shotTrace: [], nextShotTraceId: 1,
       nextBulletId: 1, nextParticleId: 1, nextPickupId: 1, nextWaterPuddleId: 1,
     };
+    state.npcs = createStreetNpcs(state, ctx);
+    return state;
   },
 
   join(state, id, ctx, info) {
@@ -814,6 +1013,10 @@ export default defineSim({
       else destroyBody(ctx, particle.body);
     }
     state.particles = liveParticles;
+
+    // Passive civilians walk along street waypoints in the same deterministic shared step.
+    // They are non-combat background NPCs in this update: no weapon target or physics body is added.
+    updateStreetNpcs(state, ctx);
 
     // Inventory actions are authoritative and happen in the ordered simulation frame.
     // A pickup is removed only after an empty slot has been found and filled.

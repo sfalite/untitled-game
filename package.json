@@ -12,6 +12,7 @@
     "test:browser:2": "npx moddio play --players 2 --seconds 30 --shots 3,10,20",
     "test:browser:3": "npx moddio play --players 3 --seconds 60 --shots 5,15,30",
     "test:stability": "npx moddio test && npx moddio play --players 2 --seconds 30 --shots 3,10,20",
-    "test:weapon-offsets": "node tests/weapon-forward-offset-regression.test.mjs"
+    "test:weapon-offsets": "node tests/weapon-forward-offset-regression.test.mjs",
+    "test:npcs": "node tests/street-npcs.test.mjs"
   }
 }

@@ -1,4 +1,4 @@
-# Chaos City.io — Update v32 (experimental world prediction)
+# Chaos City.io — Street NPCs Update (world-prediction test base)
 
 A modd.io SDK multiplayer sandbox game. This package is a controlled test of `predict: 'world'` against the v31 `predict: 'self'` baseline, focused on weapon/projectile alignment. It is not yet the confirmed stable build.
 
@@ -89,3 +89,11 @@ Apply the files together so `sim.ts`, `client/main.ts`, and the supplied audio/i
 ## Update v39 — held item offsets
 
 All held firearms and the knife are moved 20 world pixels farther forward from the player's hand, while keeping the lateral offset at 8 pixels. Client muzzle offsets and simulation projectile origins are updated together. Run `npm run test:weapon-offsets` to verify this client/simulation contract. The official modd.io runtime and live multiplayer still need to be tested.
+
+
+## Update v40 — passive street NPCs
+- Bundled sprite: `assets/npcs/man-blue-stand.png` (43×33 PNG from the user-provided link).
+- 16 passive walkers use deterministic `ctx.rng()` route choices and the existing road-cell network.
+- Each NPC has replicated 100 HP, displays a small health bar, walks between street waypoints, and avoids static obstacles and nearby players/NPCs.
+- This update keeps NPCs non-combat background civilians: it does not add weapon targeting, attacks, or extra physics bodies for them.
+- Local regression checks: `npm run test:npcs`.
