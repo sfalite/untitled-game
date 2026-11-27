@@ -85,3 +85,7 @@ Apply the files together so `sim.ts`, `client/main.ts`, and the supplied audio/i
 - Widened bench collision from 34×26 to 44×26 world pixels to match the new sprite footprint. Updated both the client-side Tiled export hitbox and authoritative Planck fixture dimensions together.
 - Bumped deterministic simulation version from 36 to 37 because the authoritative bench collider changed.
 - Added `tests/water-layer-and-bench.test.mjs` to guard water render order, local bench asset loading/use, and matched collider dimensions.
+
+## Update v39 — held item offsets
+
+All held firearms and the knife are moved 20 world pixels farther forward from the player's hand, while keeping the lateral offset at 8 pixels. Client muzzle offsets and simulation projectile origins are updated together. Run `npm run test:weapon-offsets` to verify this client/simulation contract. The official modd.io runtime and live multiplayer still need to be tested.

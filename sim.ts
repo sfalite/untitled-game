@@ -563,11 +563,11 @@ function damageBuilding(state: State, ctx: any, index: number, damage: number, p
   }
   return false;
 }
-const WEAPON_MUZZLE_FORWARD = [27, 25, 26, 24, 25] as const;
+const WEAPON_MUZZLE_FORWARD = [47, 45, 46, 44, 45] as const;
 const WEAPON_MUZZLE_SIDE = 8;
 function muzzlePosition(p: Pick<Player, 'x' | 'y' | 'aimAngle'>, weaponId: number): {x:number;y:number} {
-  // Match the exact local coordinates used by drawWeaponLocal + drawWeaponShape:
-  // Glock (8,-27), AK (8,-25), M249 (8,-26), M134 barrel cluster (8,-22), Shotgun (8,-25).
+  // Match drawWeaponLocal + drawWeaponShape after moving every held item 20 px forward:
+  // muzzle-forward distances: Glock 47, AK 45, M249 46, M134 barrel cluster 44, Shotgun 45.
   // Converting the sprite's muzzle point and the bullet origin from this one definition
   // prevents different weapons from firing a visible distance away from their barrel.
   const forward = WEAPON_MUZZLE_FORWARD[weaponId] ?? WEAPON_MUZZLE_FORWARD[0];
