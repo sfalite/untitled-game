@@ -408,6 +408,27 @@ function playDeathSoundAt(deathX: number, deathY: number, listenerX: number, lis
   }).catch(() => {});
 }
 
+const seenNpcDeathSeq = new Map<number, number>();
+function updateNpcDeathAudio(npcs: any[], listener: any): void {
+  for (const npc of npcs || []) {
+    const id = Number(npc?.id);
+    if (!Number.isFinite(id)) continue;
+    const seq = Math.max(0, Math.floor(Number(npc?.deathSeq) || 0));
+    if (!seenNpcDeathSeq.has(id)) {
+      // Establish a baseline when this client first sees the NPC; don't replay old deaths.
+      seenNpcDeathSeq.set(id, seq);
+      continue;
+    }
+    const previous = seenNpcDeathSeq.get(id) || 0;
+    if (seq > previous) {
+      seenNpcDeathSeq.set(id, seq);
+      const deathX = Number.isFinite(npc.deathX) ? npc.deathX : npc.x;
+      const deathY = Number.isFinite(npc.deathY) ? npc.deathY : npc.y;
+      playDeathSoundAt(deathX, deathY, listener.x, listener.y);
+    }
+  }
+}
+
 function updateDeathAudio(players: Record<string, any>, listener: any, localPlayerId: string): void {
   for (const [id, player] of Object.entries(players || {})) {
     const seq = Math.max(0, Math.floor(Number((player as any).deathSeq) || 0));
@@ -643,6 +664,7 @@ function drawProp(ctx: CanvasRenderingContext2D, p: any): void {
 function drawStreetNpcs(ctx: CanvasRenderingContext2D, npcs: any[], visible: { x: number; y: number; w: number; h: number }): void {
   if (!Array.isArray(npcs) || npcs.length === 0) return;
   for (const npc of npcs) {
+    if (npc.active === false || Number(npc.health) <= 0) continue;
     if (!Number.isFinite(npc.x) || !Number.isFinite(npc.y)) continue;
     if (npc.x < visible.x - 32 || npc.y < visible.y - 32 || npc.x > visible.x + visible.w + 32 || npc.y > visible.y + visible.h + 32) continue;
     const bob = Math.sin(Number(npc.walkPhase) || 0) * 0.9;
@@ -967,6 +989,12 @@ function drawCollisionDebugWorld(ctx: CanvasRenderingContext2D, state: any): voi
   // Tree trunk hitboxes (the canopies are visual only).
   ctx.strokeStyle = 'rgba(255,201,71,.98)';
   for (const t of TREES) { ctx.beginPath(); ctx.arc(t.x, t.y, 7.5, 0, Math.PI * 2); ctx.stroke(); }
+  // NPC physical contact circles (smaller than the artwork by design).
+  ctx.strokeStyle = 'rgba(73,232,255,.98)';
+  for (const npc of state.npcs || []) {
+    if (npc.active === false || Number(npc.health) <= 0) continue;
+    ctx.beginPath(); ctx.arc(npc.x, npc.y, 12, 0, Math.PI * 2); ctx.stroke();
+  }
   // Physical prop bodies.
   ctx.strokeStyle = 'rgba(80,220,255,.95)';
   for (const p of state.props || []) {
@@ -1084,6 +1112,7 @@ function drawGame(state: any, self: any, playerId: string): void {
   updateWeaponAudio(s.players, playerId);
   updateMeleeAudio(s.players, playerId);
   updateDeathAudio(s.players, mine, playerId);
+  updateNpcDeathAudio(s.npcs || [], mine);
   // In v32 predict:'world', the SDK supplies one shared predicted world for player and projectile
   // rendering. The v31 self-prediction package remains available as a rollback baseline.
   const fit = Math.min(view.width / 960, view.height / 640);
@@ -1474,7 +1503,7 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   lines.push(`LOCAL (${Math.round(mine.x)}, ${Math.round(mine.y)}) · aim ${Math.round(aimDegrees)}° · HP ${Math.round(mine.health ?? 0)}`);
   lines.push(`DRIFT predicted-confirmed ${netDiagnostics.localDriftPx == null ? '--' : netDiagnostics.localDriftPx.toFixed(1) + ' px'} · players ${Object.keys(state.players || {}).length}`);
   lines.push(`ENTITIES bullets ${(state.bullets || []).length} · pickups ${(state.pickups || []).length} · particles ${(state.particles || []).length} · props ${(state.props || []).filter((p: any) => p.active).length}`);
-  lines.push(`NPCS ${(state.npcs || []).filter((npc: any) => Number(npc.health) > 0).length} passive street walkers · 100 HP`);
+  lines.push(`NPCS ${(state.npcs || []).filter((npc: any) => npc.active !== false && Number(npc.health) > 0).length} walkers · 100 HP · collision/damage enabled`);
   const liveBuildings = (state.buildings || []).filter((b: any) => b.active).length;
   const damagedBuildings = (state.buildings || []).filter((b: any) => b.active && Number(b.health) < 1000).length;
   lines.push(`BUILDINGS ${liveBuildings}/${BUILDINGS.length} active · ${damagedBuildings} damaged · HP 1000 · respawn 5m`);
