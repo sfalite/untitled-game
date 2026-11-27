@@ -189,11 +189,31 @@ function loadImage(src: string): Promise<HTMLImageElement> {
     img.src = src;
   });
 }
+// Load the exact water PNG supplied for this game. Use a unique bundled filename to avoid
+// stale water.png caches, then fall back to the SAME PNG bytes embedded in the client if the
+// modd.io iframe fails to resolve the relative asset URL. There is deliberately no drawn-water
+// substitute: the puddle must always use the supplied sprite.
+let waterSpriteSource = 'LOADING';
+async function loadWaterSprite(): Promise<HTMLImageElement> {
+  const bundled = await loadImage('assets/water-puddle.png');
+  if (bundled.complete && bundled.naturalWidth > 0) {
+    waterSpriteSource = 'BUNDLED PNG';
+    return bundled;
+  }
+  const embedded = await loadImage('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFoAAABaAgMAAABFxqmRAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAOxAAADsQBlSsOGwAAAAlQTFRFAAAAAGrsAHL//EOMVQAAAAN0Uk5TAP//RFDWIQAAAkhJREFUeJx1lTFyrDAMhu2CI3AfmtSPzMOZeQdIlfNstQfITOSZkDpFSLGn4QgUPP2SbWxsKBjvt0iWfkm2Ne3HytuZbW7wfjBmXSpuJ37tvuL90A/bXBqAu240hsodLNw4Xmwz4edfn3j3rP7hCA4j759GrNbvGQEbitwhTHVkp5H37wcS7uQLOLJuovV34m+s4bVutf74zo0rBc5r5eyod8N2f7g/5DO++63rwV+HD/DXIeTCgbKAkbOtiQas1MFvKfmtMwcPYab/Ak9hHlziOfMYv/03nr6/4qpPxUmErvju6YJLZSrOakhBk2ylgT1kSwY/vsmlAxpcWqn2zyl8+kY8mkKLG7rg69sFp6XSXza+L1UdD95XCcBPbOdzPKYbz44kfu7t7mQg+erYlW6gD+bLFqGuC/TkRTfmBrvHKMu8u3wH+Vx5oTXJ5AsvNCLtkzPfybf5+9zksQ8rfl8Sz3vikn/6Jo/9jNcxqiYeUMqPUS10KHiuW1GxpLN5KVsl1KXimBg5V0+tpXU/ySwG6J8GZ+2kvlqu3cdyRq4yEDpAN3jPuJRVG6PgOA4H7aTAVTacw6FXI7+F4OKZXHDpD236gn9g33Dm47wtuN4ROec1LgWRPPfDOTrOQWLL+fr9xa6p4FjT+njmS+EBrTLdkO3TCCOXdEZwJK43+po4M1qXdA/ydXODY7aSGwihO1FZOaTefejDEeIrh3HsE32UcwlSXxXcTGnuAkc88VLNOeJv8A75LjVHJGRqblx2yec8Xconnj//AY2We2q06RbAAAAAAElFTkSuQmCC');
+  if (embedded.complete && embedded.naturalWidth > 0) {
+    waterSpriteSource = 'EMBEDDED PNG';
+    return embedded;
+  }
+  waterSpriteSource = 'LOAD FAILED';
+  return embedded;
+}
+
 const [atlas, playerSprite, treeSprite, waterSprite] = await Promise.all([
   loadImage('assets/tilesheet_complete.png'),
   loadImage('assets/player.png'),
   loadImage('assets/trees/tree.png'),
-  loadImage('assets/water.png'),
+  loadWaterSprite(),
 ]);
 
 // Locally bundled sound effects. The local player gets immediate one-shot audio on a predicted
@@ -510,27 +530,18 @@ function drawWallsLayer(ctx: CanvasRenderingContext2D, visible: {x:number;y:numb
   }
 }
 function drawWaterPuddles(ctx: CanvasRenderingContext2D, puddles: any[], visible: {x:number;y:number;w:number;h:number}): void {
-  if (!Array.isArray(puddles)) return;
+  // Never draw a homemade substitute. The exact supplied PNG is loaded from assets/ or its
+  // byte-identical embedded fallback, and the puddle is only a non-colliding visual decal.
+  if (!imageReady(waterSprite) || !Array.isArray(puddles)) return;
   const size = 150, half = size / 2;
   for (const puddle of puddles) {
     const x = Number(puddle?.x), y = Number(puddle?.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     if (x + half < visible.x || x - half > visible.x + visible.w || y + half < visible.y || y - half > visible.y + visible.h) continue;
     ctx.save();
-    if (imageReady(waterSprite)) {
-      // Use the supplied water artwork at exactly 150x150 when it is available.
-      ctx.globalAlpha = 0.96;
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(waterSprite, x - half, y - half, size, size);
-    } else {
-      // Fallback remains visible if the asset fails to load inside the modd.io iframe.
-      ctx.globalAlpha = 0.82;
-      ctx.fillStyle = '#198fe8';
-      ctx.beginPath(); ctx.ellipse(x, y + 5, 49, 34, -0.12, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#42b5ff';
-      ctx.beginPath(); ctx.ellipse(x - 15, y - 5, 23, 14, -0.5, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(x + 22, y + 2, 22, 13, 0.35, 0, Math.PI * 2); ctx.fill();
-    }
+    ctx.globalAlpha = 1;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(waterSprite, x - half, y - half, size, size);
     ctx.restore();
   }
 }
@@ -1428,7 +1439,7 @@ function drawMultiplayerDiagnostics(ctx: CanvasRenderingContext2D, mine: any, st
   const damagedBuildings = (state.buildings || []).filter((b: any) => b.active && Number(b.health) < 1000).length;
   lines.push(`BUILDINGS ${liveBuildings}/${BUILDINGS.length} active · ${damagedBuildings} damaged · HP 1000 · respawn 5m`);
   lines.push(`MELEE swing ${mine.meleeSeq ?? 0} · opponent hits ${mine.meleeHitSeq ?? 0} · knife damage 36`);
-  lines.push(`HYDRANT WATER decals ${(state.waterPuddles || []).length} · size 150px · lifetime 150s · no collider`);
+  lines.push(`HYDRANT WATER ${(state.waterPuddles || []).length} · 150px · 120s · ${waterSpriteSource} · no collider`);
   lines.push(`SHOTS local token ${lastLocalShotTokenRequested || '--'} · fired ${confirmedToken ?? '--'} · resolved ${resolvedToken ?? '--'} · queue ${queued}`);
   lines.push(`FIRE GATE baseline ${localShotTokenBaselineReady ? 'READY' : 'WAIT'} · aim ${aimCameraReady ? 'READY' : 'WAIT'} · click pulse ${pendingMouseFirePulse ? 'PENDING' : 'clear'}`);
   lines.push(`LAST LOCAL SHOT ${lastLocalShotWeapon >= 0 ? WEAPON_NAMES[lastLocalShotWeapon] : '--'} · ${lastLocalShotAt ? ((performance.now() - lastLocalShotAt) / 1000).toFixed(1) + 's ago' : '--'}`);
